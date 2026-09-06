@@ -921,8 +921,32 @@ Prove the port works end-to-end, and write down how to reproduce it.
   and its root cause (the GeneralsX playbook's style), known issues, and what a follow-up would
   tackle. Include which changes are candidates to offer upstream to CorsixTH and which are
   delivery-only.
-- Update the repo `README.md` with a short iOS section pointing at the docs (keep it brief and
-  in the existing tone; do not restructure the README).
+- Update the repo `README.md` with an iOS section. The user's explicit requirement: it must
+  **explain the iOS touch controls**, not merely link to a doc. Someone installing this on an
+  iPad should be able to read the README and know how to play without discovering the gestures
+  by accident — several of them are not guessable (a second-finger tap to rotate, double-tap to
+  pick up staff, a tap at the top edge for the menu bar).
+
+  Document at least: tap to click; long press as right click; long press an object then move
+  without lifting to carry it; double tap a member of staff to pick them up, then lift, drag and
+  release to place; second-finger tap while carrying to rotate; one finger to pan; two fingers to
+  pan and pinch-zoom together, in every mode; drag inside lists to scroll; tap the top edge for
+  the menu bar; and the first tap on the bottom panel's dynamic info bar revealing its buttons.
+  Say which controls are unreachable on touch and why (the hotkey-only `sell`, camera bookmarks).
+
+  Keep it in the existing README's tone and do not restructure the file. A short table of gesture
+  → action is likely the clearest form. Note the `touch_one_finger_pan` switch exists for anyone
+  who prefers two-finger-only navigation.
+
+- **Before the branch is pushed, re-run the personal-data scan.** The history was rewritten to
+  scrub real Apple team ids, certificate identity strings, the user's name and email, real bundle
+  ids, both devicectl identifiers, both hardware UDIDs and `/Users/...` home paths. Confirm none
+  have returned in any tracked file or any commit on the branch, and that
+  `scripts/build/ios/ios-signing.env` is still ignored and untracked. Do NOT copy values out of
+  the git-ignored workspace reports — they still contain the real ones, and each carries a banner
+  saying so. Use the placeholders (`ABCDE12345`, `"Apple Development: Your Name (XXXXXXXXXX)"`,
+  `com.example.corsixth`, `$HOME`) and point readers at the env file. Do not cite commit hashes
+  from those reports; they predate the rewrite and no longer resolve.
 
 ### Acceptance
 
