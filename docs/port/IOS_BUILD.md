@@ -78,6 +78,16 @@ rebuild anything.
 `ios-device-xcode` exists for the packaging/signing work; the Ninja presets give faster and
 cleaner compiler diagnostics.
 
+Two things worth knowing about configure:
+
+* It still runs `vcpkg install` in manifest mode through the toolchain file, so `VCPKG_ROOT`
+  must be set even though nothing needs building. With `build/ios-deps/<triplet>` already
+  populated it reports every package as "already installed" and costs a couple of seconds.
+* `CMAKE_SYSTEM_PROCESSOR` (set to `arm64` by `ios-base`) is baked into
+  `CMakeFiles/<ver>/CMakeSystem.cmake` on the **first** configure of a binary directory.
+  Re-running a preset over an existing cache will not change it; delete the binary directory
+  instead. Without it `CORSIX_TH_ARCH` is empty and `th_lua.cpp` fails to compile.
+
 ## Why an overlay triplet
 
 `CMake/ios/triplets/arm64-ios-min16.cmake` and `arm64-ios-simulator-min16.cmake` are copies
@@ -194,7 +204,7 @@ scripts/build/ios/package-ios.sh --no-build --push-data ~/CorsixTH-testdata/full
 | Flag | Effect |
 | --- | --- |
 | *(none)* | Reconfigure, incremental build, wipe and re-stage, sign. |
-| `--clean` | Delete `build/ios-device-xcode` and `build/ios-stage` first. |
+| `--clean` | Delete `build/ios-device-xcode` and `build/ios-stage` first. It does **not** touch `build/ios-deps` (run `fetch-deps.sh device` yourself first; a missing dependency tree surfaces as a CMake configure failure, not a friendly message) and it does **not** touch `build/ios-icons`, so the icon cache survives and the run prints `icons: up to date`. |
 | `--resign-only` | Skip the configure and the stage wipe; still runs the incremental `xcodebuild` that refreshes the provisioning profile. Refuses to run if the warm build tree was configured for a different bundle id. |
 | `--no-build` | Stage and sign what is already built; does **not** refresh the profile. |
 | `--install` | `devicectl device install app`. |
@@ -274,3 +284,96 @@ security cms -D -i build/ios-stage/CorsixTH.app/embedded.mobileprovision \
 
 When the profile does age out, `scripts/build/ios/package-ios.sh --resign-only --install`
 refreshes it; the incremental `xcodebuild` is what talks to Apple.
+
+---
+
+# Reproducing from a clean tree
+
+Both documented paths were re-run from a **deleted** binary directory on the reference host, in
+that state, and both are reproduced below verbatim. `build/ios-deps` was deliberately left alone:
+rebuilding dependencies is expensive and `fetch-deps.sh` already verifies its own output.
+
+## The app build and package
+
+```
+$ time ./scripts/build/ios/package-ios.sh --clean
+==> signing environment from .../scripts/build/ios/ios-signing.env
+==> team ABCDE12345, bundle id com.example.corsixth, identity Apple Development: Your Name (XXXXXXXXXX)
+==> clean: removing .../build/ios-device-xcode and .../build/ios-stage
+==> cmake --preset ios-device-xcode
+Note: FFmpeg video is disabled
+Note: Update check is disabled
+Building common libraries
+Building CorsixTH
+Linking lua modules
+==> xcodebuild (signs the bare app and refreshes the provisioning profile)
+    Provisioning Profile: "iOS Team Provisioning Profile: *"
+** BUILD SUCCEEDED **
+==> cmake --install -> .../build/ios-stage
+==> app icon
+  icons: up to date (.../build/ios-icons)
+==> codesign
+.../build/ios-stage/CorsixTH.app: replacing existing signature
+.../build/ios-stage/CorsixTH.app: valid on disk
+.../build/ios-stage/CorsixTH.app: satisfies its Designated Requirement
+==> 371 files,  64M in .../build/ios-stage/CorsixTH.app
+        30.331 total
+```
+
+(The team id, bundle id and identity above are the placeholders this document uses throughout;
+the real values come from the git-ignored `scripts/build/ios/ios-signing.env`.)
+
+Two expected messages, neither of them a problem: a CMake warning that you cannot run CorsixTH
+*from Xcode* without `-DUSE_SOURCE_DATADIRS` (irrelevant — the product is installed to a device,
+not run on the host), and `Cannot locate Doxygen or Lua, 'doc' target is not available`.
+
+Artifact verification of what that produced:
+
+```
+$ lipo -info build/ios-stage/CorsixTH.app/CorsixTH
+Non-fat file: ... is architecture: arm64
+
+$ vtool -show-build build/ios-stage/CorsixTH.app/CorsixTH
+ platform IOS
+    minos 16.0
+      sdk 26.5
+
+$ otool -L build/ios-stage/CorsixTH.app/CorsixTH | tail -n +2 | grep -v "/System/Library\|/usr/lib"
+   (no output: nothing but system frameworks — every dependency is statically linked)
+
+$ codesign --verify --deep --strict --verbose=2 build/ios-stage/CorsixTH.app
+build/ios-stage/CorsixTH.app: valid on disk
+build/ios-stage/CorsixTH.app: satisfies its Designated Requirement
+
+$ plutil -p build/ios-stage/CorsixTH.app/Info.plist | grep -E "MinimumOSVersion|CFBundleIconName|UIRequiresFullScreen"
+  "CFBundleIconName" => "AppIcon"
+  "MinimumOSVersion" => "16.0"
+  "UIRequiresFullScreen" => true
+
+$ shasum -a 256 build/ios-stage/CorsixTH.app/*.sf2
+9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe  .../GeneralUser-GS.sf2
+```
+
+## The Ninja developer build
+
+```
+$ rm -rf build/ios-device
+$ export VCPKG_ROOT=$HOME/vcpkg
+$ time (cmake --preset ios-device && cmake --build build/ios-device)
+...
+[40/40] Linking CXX executable CorsixTH/CorsixTH.app/CorsixTH
+ld: warning: ignoring duplicate libraries: '.../build/ios-deps/device/arm64-ios-min16/lib/liblua.a'
+        7.282 total
+
+$ lipo -info build/ios-device/CorsixTH/CorsixTH.app/CorsixTH
+Non-fat file: ... is architecture: arm64
+$ vtool -show-build build/ios-device/CorsixTH/CorsixTH.app/CorsixTH | grep -E "platform|minos"
+ platform IOS
+    minos 16.0
+$ grep -n "CORSIX_TH_OS\|CORSIX_TH_ARCH" build/ios-device/CorsixTH/Src/config.h
+110:#define CORSIX_TH_OS "ios"
+113:#define CORSIX_TH_ARCH "arm64"
+```
+
+The duplicate-`liblua.a` warning is pre-existing and harmless: `CorsixTH/CMakeLists.txt` links
+`${LUA_LIBRARIES}`, which lists it twice. It is not iOS-specific.
