@@ -18,11 +18,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE. --]]
 
+local TH = require("TH")
+
 --! The multi-purpose panel for launching dialogs / screens and dynamic information.
 class "UIBottomPanel" (Window)
 
 ---@type UIBottomPanel
 local UIBottomPanel = _G["UIBottomPanel"]
+
+-- CorsixTH-iOS @bugfix 2026-09-07 true where the only pointer is a finger.
+local touch_input = TH.GetCompileOptions().os == "ios"
 
 local MESSAGE_DOOR_FULLY_OPEN = 0
 local MESSAGE_DOOR_FULLY_SHUT = 22
@@ -401,14 +406,34 @@ function UIBottomPanel:showAdditionalButtons(x, y)
       for _, panel in ipairs(panels) do
         panel.visible = true
       end
+      -- CorsixTH-iOS @bugfix 2026-09-07 these buttons replace the dynamic info
+      -- bar on hover, and a finger has no hover. The tap's motion reveals them
+      -- and the tap's click would land on whichever one happened to appear
+      -- under the finger, before the user has seen what appeared. Remember that
+      -- they have only just been revealed, so the tap that revealed them can be
+      -- spent on doing exactly that: the next one selects.
+      self.touch_awaiting_reveal = touch_input
     end
   else -- Outside the rectangle
     if panels[1].visible then -- Are the buttons already invisible?
       for _, panel in ipairs(panels) do
         panel.visible = false
       end
+      self.touch_awaiting_reveal = false
     end
   end
+end
+
+function UIBottomPanel:onMouseDown(button, x, y)
+  if self.touch_awaiting_reveal then
+    self.touch_awaiting_reveal = false
+    if button == "left" and self:hitTest(x, y) then
+      -- Swallow it. No button is armed, so the matching release does nothing
+      -- either, and the buttons are now visible to be aimed at properly.
+      return true
+    end
+  end
+  return Window.onMouseDown(self, button, x, y)
 end
 
 function UIBottomPanel:hitTest(x, y, x_offset)
