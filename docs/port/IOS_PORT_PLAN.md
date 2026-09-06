@@ -765,6 +765,29 @@ Requirements carried over from the GeneralsX port, each of which was a real bug 
   Check `menu_disappear_counter` / `disappear_counter` (`menu.lua:62-100`) — the auto-hide
   timing is tuned for a mouse and will need adjusting for touch.
 
+- **The bottom panel's hover-reveal needs a tap-to-reveal, then tap-to-select.** User report:
+  "the bottom right bar that has additional menus that appear on hover. I think a single tap on
+  this bar should count as a 'hover' and then a second tap should be the selection."
+
+  `UIBottomPanel` (`CorsixTH/Lua/dialogs/bottom_panel.lua`) swaps its dynamic info bar for a set
+  of buttons while the pointer is over it (`:108` "Buttons that are shown instead of the dynamic
+  info bar when hovering over it", driven from `:onMouseMove` at `:389` and `active_button` at
+  `:125`, with `:onTick` at `:644-666` keeping the bar up briefly after the pointer leaves).
+  With touch there is no hover, so the buttons are effectively unreachable: the tap's click
+  arrives before the user can see what appeared.
+
+  Implement the user's model: **the first tap on this bar acts as a hover** (reveal the buttons
+  and hold them visible), **and a second tap selects**. Do not let the first tap also click.
+  Reuse the hold/auto-hide timing already in `onTick` rather than inventing a new timer, and
+  make sure the revealed state is dismissed sensibly by tapping elsewhere.
+
+  This is the FOURTH instance of the same root problem — a desktop-only input path leaving
+  something unreachable on a tablet (the escape-key menu bar, the escape-key movie skip, the
+  hotkey-only object rotation, and now hover-reveal). Before implementing, sweep for others of
+  the same shape rather than fixing them one user report at a time: grep for `onMouseMove`
+  handlers that change what is displayed, and for `addKeyHandler` bindings that are the only
+  route to a feature. Report what the sweep found even if you do not fix it all.
+
 - **Text entry** (hospital name, save names) → bring up the on-screen keyboard via
   `SDL_StartTextInput` when a text field takes focus, and hide it on blur. The Lua UI already
   has text-entry widgets and the engine already dispatches `SDL_EVENT_TEXT_INPUT`
