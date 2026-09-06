@@ -1234,9 +1234,17 @@ function UI:onTouchHoverEnd(x, y)
   -- Windows that use hover to *reveal* something check this and opt out: what
   -- they are showing was deliberately opened and is not a highlight following a
   -- finger that has gone.
+  -- The flag is cleared through a pcall so that a window whose onMouseMove
+  -- raises cannot leave it set: the event dispatcher catches the error and
+  -- carries on, and a latched flag would silently disable the bottom panel's
+  -- hover reveal and the menu bar for the rest of the session. The error is
+  -- re-raised so it still reaches the dispatcher exactly as before.
   self.touch_clearing_hover = true
-  local repaint = window:onMouseMove(-1, -1, 0, 0)
+  local ok, repaint = pcall(window.onMouseMove, window, -1, -1, 0, 0)
   self.touch_clearing_hover = false
+  if not ok then
+    error(repaint, 0)
+  end
   return repaint and true or false
 end
 

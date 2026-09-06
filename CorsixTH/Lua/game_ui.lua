@@ -951,6 +951,13 @@ end
 --!return (boolean) event processed indicator
 function GameUI:onTouchCamera(dx, dy, ratio, ax, ay)
   self.touch_gesture_active = true
+  -- CorsixTH-iOS @bugfix 2026-09-07 the camera is now driven directly by the
+  -- fingers, so any edge scroll armed before this must stop. Carrying an object
+  -- into the edge band arms one, and a second finger landing on top of that
+  -- carry hands the camera over here while the carrying finger stops emitting
+  -- motion -- leaving the latched edge scroll to move the map at the same time
+  -- as the pan, at roughly double rate, until every finger lifts.
+  self:_stopTouchEdgeScroll()
   if ratio ~= 1 then
     -- Applied as an exponent rather than a multiplier so the response stays
     -- multiplicative: pinching in and back out returns to the same zoom
