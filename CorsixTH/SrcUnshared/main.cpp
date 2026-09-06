@@ -75,6 +75,19 @@ void set_ios_config_home() {
   std::printf("Writable state directory: %s\n", path.c_str());
 }
 
+// CorsixTH-iOS @bugfix 2026-09-06 SDL_HINT_AUDIO_CATEGORY defaults to
+// "ambient", which maps to AVAudioSessionCategoryAmbient: the hardware mute
+// switch silences the whole app and audio ducks under any other playing app. A
+// game wants AVAudioSessionCategoryPlayback, which SDL selects for "playback".
+// The hint is read when the audio device is opened, so it must be set before
+// th::sound::init() runs.
+void set_ios_audio_session() {
+  if (!SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback")) {
+    std::fprintf(stderr, "Unable to set the iOS audio category: %s\n",
+                 SDL_GetError());
+  }
+}
+
 }  // namespace
 #endif
 
@@ -152,6 +165,7 @@ int main(int argc, char** argv) {
 
 #ifdef CORSIX_TH_IOS
   set_ios_config_home();
+  set_ios_audio_session();
 #endif
 
   bool bRun = true;

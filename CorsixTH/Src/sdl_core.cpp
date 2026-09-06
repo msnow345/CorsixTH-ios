@@ -38,6 +38,7 @@ SOFTWARE.
 #include "lua_sdl.h"
 #include "th_gfx.h"
 #include "th_lua.h"
+#include "th_sound.h"
 
 namespace {
 
@@ -497,6 +498,20 @@ void mainloop(lua_State* L) {
           lua_pushinteger(L, *(static_cast<int*>(e.user.data1)));
           nargs = 2;
           break;
+#ifdef CORSIX_TH_IOS
+        // CorsixTH-iOS @bugfix 2026-09-06 an AVAudioSession interruption (call,
+        // Siri, alarm) or an output route change (headphones in/out) can leave
+        // the audio device suspended once the interruption ends, which reads as
+        // "the game went permanently silent". Nudge the device whenever we come
+        // back to the front or the device list changes; track pause state is
+        // deliberately untouched.
+        case SDL_EVENT_DID_ENTER_FOREGROUND:
+        case SDL_EVENT_AUDIO_DEVICE_ADDED:
+        case SDL_EVENT_AUDIO_DEVICE_REMOVED:
+          th::sound::resume_audio_device();
+          nargs = 0;
+          break;
+#endif
         default:
           nargs = 0;
           break;
