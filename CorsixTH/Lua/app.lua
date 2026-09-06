@@ -1601,6 +1601,7 @@ function App:findSoundFont()
     self.config.soundfont or false,
     data_dir .. "FluidR3_GM.sf2",
     data_dir .. "FluidR3.sf3",
+    data_dir .. "GeneralUser-GS.sf2",
     "/usr/share/soundfonts/default.sf2", -- default linux
     "/usr/share/sounds/sf2/FluidR3_GM.sf2", -- debian based
     "/usr/share/soundfonts/FluidR3_GM.sf2" -- archlinux and others

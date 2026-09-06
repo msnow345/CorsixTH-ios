@@ -313,15 +313,31 @@ if(WITH_MIDI_DEVICE)
 endif()
 
 if(FETCH_SOUNDFONT)
-  FetchContent_Declare(
-    FluidR3
-    URL https://raw.githubusercontent.com/Jacalz/fluid-soundfont/master/SF3/FluidR3.sf3
-    URL_HASH SHA256=32039e039c2f708467a6f171fbfd9fecdcadfe40a2327837c391490c8de70021
-    DOWNLOAD_NO_EXTRACT TRUE
-  )
+  if(IOS)
+    # CorsixTH-iOS @build 2026-09-06 the iOS fluidsynth is built without libsndfile, so
+    # SF3's Ogg-compressed samples cannot be decoded. Fetch an uncompressed SF2 instead.
+    # GeneralUser GS v2.0.3, 30.8 MB, GeneralUser GS License v2.0 (redistributable in
+    # software products); see docs/port/IOS_AUDIO.md for provenance.
+    FetchContent_Declare(
+      GeneralUserGS
+      URL https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/684543d5e5efaef08d02be50dcda8d552478fa60/GeneralUser-GS.sf2
+      URL_HASH SHA256=9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe
+      DOWNLOAD_NO_EXTRACT TRUE
+    )
 
-  FetchContent_MakeAvailable(FluidR3)
-  set(FLUIDR3_FILE ${fluidr3_SOURCE_DIR}/FluidR3.sf3)
+    FetchContent_MakeAvailable(GeneralUserGS)
+    set(SOUNDFONT_FILE ${generalusergs_SOURCE_DIR}/GeneralUser-GS.sf2)
+  else()
+    FetchContent_Declare(
+      FluidR3
+      URL https://raw.githubusercontent.com/Jacalz/fluid-soundfont/master/SF3/FluidR3.sf3
+      URL_HASH SHA256=32039e039c2f708467a6f171fbfd9fecdcadfe40a2327837c391490c8de70021
+      DOWNLOAD_NO_EXTRACT TRUE
+    )
+
+    FetchContent_MakeAvailable(FluidR3)
+    set(SOUNDFONT_FILE ${fluidr3_SOURCE_DIR}/FluidR3.sf3)
+  endif()
 endif()
 
 if(FETCH_UNICODE_FONT)
@@ -438,7 +454,7 @@ if(NOT USE_SOURCE_DATADIRS)
   endif()
 
   if(FETCH_SOUNDFONT)
-    install(FILES ${FLUIDR3_FILE} DESTINATION ${CORSIX_TH_DATADIR})
+    install(FILES ${SOUNDFONT_FILE} DESTINATION ${CORSIX_TH_DATADIR})
   endif()
   if(FETCH_UNICODE_FONT)
     install(FILES ${GONOTO_FILE} DESTINATION ${CORSIX_TH_DATADIR})
