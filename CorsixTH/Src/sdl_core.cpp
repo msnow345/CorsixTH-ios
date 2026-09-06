@@ -1285,7 +1285,38 @@ bool poll_long_press(lua_State* L) {
   float ay = s.down_y;
   const bool anchored = query_long_press_anchor(L, &ax, &ay);
   // No left button was ever sent, so this is a pure right click.
-  const bool repaint = emit_click(L, 3, ax, ay) || repaint_held;
+  bool repaint = emit_click(L, 3, ax, ay) || repaint_held;
+  // Release it now rather than after the frame. Picking an object up happens on
+  // the button UP -- Object:onClick is reached from UI:onMouseUp -- so whether
+  // anything was picked up is simply not answerable until the release has
+  // landed. Nothing is lost by not waiting: the deferred release exists so a
+  // left click's pressed sprite gets a frame to be drawn in, and a right click
+  // arms no such sprite.
+  repaint = flush_pending_release(L) || repaint;
+
+  // Did that pick something up? Then the finger is still down and the gesture
+  // is not over: it continues as a carry, so the object follows immediately
+  // rather than making the user lift and touch down again to move what they
+  // have just picked up.
+  //
+  // Matched exactly against `carry`, not is_carry(), and deliberately so. A
+  // `carry_cancellable` is a person, and picking a person up is expected to
+  // outlive the gesture -- they are carried across a two-finger pan and put
+  // down somewhere else entirely -- so that one still ends here and is resumed
+  // by a later drag. Objects do not walk away and are placed where they were
+  // picked up from, give or take, so for them one continuous gesture is right.
+  if (query_drag_mode(L, s.f1x, s.f1y) ==
+      static_cast<int>(drag_mode::carry)) {
+    // From where the finger is NOW. Anything else and the object jumps by
+    // however far the finger drifted during the hold -- which is bounded by
+    // the drag dead zone, but visible, and it would land on the wrong tile.
+    s.last_x = s.f1x;
+    s.last_y = s.f1y;
+    repaint = emit_motion(L, s.f1x, s.f1y) || repaint;
+    set_phase(phase::drag_carry, "long press picked something up: carry on");
+    return repaint;
+  }
+
   set_phase(phase::longpress,
             anchored ? "held: right click on the entity it started on"
                      : "held: right click where it started");
