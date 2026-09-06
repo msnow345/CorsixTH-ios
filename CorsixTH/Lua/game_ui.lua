@@ -48,6 +48,27 @@ local key_scroll_speed = 10
 -- game is being played is not a property of the save.
 local touch_input = TH.GetCompileOptions().os == "ios"
 
+-- ---------------------------------------------------------------------------
+-- CorsixTH-iOS @feature 2026-09-07 THE ONE-FINGER PAN SWITCH.
+--
+-- Does a one-finger drag across open map move the camera?
+--
+--   true  -- one finger pans outside placement modes, two fingers pan in every
+--            mode. Placement modes still take the one finger for themselves,
+--            so this never applies while something is being carried or sized.
+--   false -- one finger never moves the camera anywhere. A drag on open map is
+--            inert: it emits nothing while it moves and nothing when it lifts.
+--            Two fingers become the only way to move the view.
+--
+-- Both models are fully implemented and this line chooses between them; there
+-- is deliberately no settings-screen option, because this is a question about
+-- which one feels right rather than a preference to be configured. Flipping it
+-- is the whole change: GameUI:onTouchDragQuery below is the only reader, and
+-- the recogniser in sdl_core.cpp already has a phase for each answer
+-- (drag_pan / drag_none).
+local touch_one_finger_pan = true
+-- ---------------------------------------------------------------------------
+
 -- Deceleration of a released touch flick, per millisecond. This is
 -- UIScrollView's normal rate, which is what makes a coast read as native rather
 -- than merely damped. It deliberately does not use scrolling_momentum: that is
@@ -855,8 +876,8 @@ end
 --! smooth discrete mouse-wheel clicks. A pinch is already a continuous ratio
 --! describing exactly the zoom the fingers asked for.
 --!
---!param dx,dy (number) Movement of the two-finger centroid in screen pixels
--- since the previous message.
+--!param dx,dy (number) Movement of the finger, or of the two-finger centroid,
+-- in screen pixels since the previous message.
 --!param ratio (number) Change in finger separation, 1 when not pinching.
 --!param ax,ay (number) The screen point to hold still while zooming, which is
 -- the point between the fingers.
@@ -988,9 +1009,10 @@ end
 
 --! Is something currently being positioned on the map?
 --! One rule for every placement flow: sizing a room, placing its door and
---! windows, dropping an object, siting a member of staff. The one finger drives
---! whichever of them is live, and two fingers move the view, which is what they
---! do everywhere else too.
+--! windows, dropping an object, siting a member of staff. While any of them is
+--! live the one finger drives it and never moves the camera, whatever
+--! touch_one_finger_pan says; two fingers move the view instead, which is what
+--! they do everywhere else too.
 --!return (Window, boolean) The window doing the placing and whether it wants a
 --! held button rather than a carry, or nil.
 function GameUI:_activePlacement()
@@ -1010,9 +1032,11 @@ function GameUI:_activePlacement()
 end
 
 --! Decide what a one-finger drag means in game. Anything over a dialog is the
---! dialog's, as elsewhere in the UI; on the map it is the placement's, if
---! something is being placed. Otherwise it is nothing: dragging a finger across
---! open map does not move the view, because two fingers do that.
+--! dialog's, as elsewhere in the UI. On the map it belongs to whatever is being
+--! placed, if anything is; that test comes first, and is why a stray finger can
+--! never shift the map out from under a room being sized. With nothing being
+--! placed there is nothing for the finger to be busy with, so it pans -- or
+--! does nothing, if touch_one_finger_pan is off.
 --!param x,y (number) Where the finger first landed, in screen coordinates.
 --!return (integer) One of the UI.TOUCH_DRAG_* values.
 function GameUI:onTouchDragQuery(x, y)
@@ -1027,7 +1051,7 @@ function GameUI:onTouchDragQuery(x, y)
   if placement then
     return wants_button and UI.TOUCH_DRAG_BUTTON or UI.TOUCH_DRAG_CARRY
   end
-  return UI.TOUCH_DRAG_NONE
+  return touch_one_finger_pan and UI.TOUCH_DRAG_CAMERA or UI.TOUCH_DRAG_NONE
 end
 
 --! A second finger tapped while one finger was carrying something. CorsixTH's

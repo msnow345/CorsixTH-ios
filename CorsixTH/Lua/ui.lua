@@ -1109,12 +1109,12 @@ function UI:_windowAt(x, y)
 end
 
 -- What a one-finger drag can mean. The recogniser in sdl_core.cpp owns gesture
--- identity; only the game knows what a gesture means where it started. Moving
--- the camera is not on the list: that is two fingers, in every mode, always.
+-- identity; only the game knows what a gesture means where it started.
 UI.TOUCH_DRAG_NONE = 0
 UI.TOUCH_DRAG_BUTTON = 1
 UI.TOUCH_DRAG_WHEEL = 2
 UI.TOUCH_DRAG_CARRY = 3
+UI.TOUCH_DRAG_CAMERA = 4
 
 --! Decide what a one-finger drag beginning at this point means.
 --! Called by the iOS touch layer the instant a press passes the drag dead zone

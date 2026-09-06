@@ -363,11 +363,13 @@ constexpr std::string_view dispatch_touch_rotate("touch_rotate");
 // started. Everything it emits goes through App:dispatch, which is the exact
 // entry point real SDL mouse events use, so the 298 Lua UI files are unchanged.
 //
-// The division is absolute and has no modes in it: one finger interacts, two
-// fingers navigate. One finger never moves the camera, anywhere, so there is
-// never a question of whether a drag was meant to pan or to do the thing under
-// it; and two-finger pan and zoom work in every mode, including in the middle
-// of a placement, so the one finger is always free to be spoken for.
+// Two fingers navigate in every mode, always: pan by centroid and pinch, at the
+// same time, with inertia. That is what frees the one finger to belong to
+// whatever is going on where it landed -- and inside a placement it does,
+// carrying or sizing and never moving the camera, so a stray finger cannot
+// shift the map out from under a room being sized. Outside a placement there is
+// nothing for it to be busy with, so it pans; see touch_one_finger_pan in
+// game_ui.lua, which is the single switch controlling that.
 //
 // Two rules carried over from the GeneralsX port, each of which was a real bug
 // there:
@@ -386,6 +388,7 @@ namespace touch {
 enum class phase {
   idle,         // no fingers tracked
   pending,      // one finger down, gesture unidentified, no button emitted
+  drag_pan,     // one finger past the dead zone, panning the camera
   drag_none,    // one finger past the dead zone with nothing to drag: a no-op
   drag_mouse,   // one finger past the dead zone, held left button (room sizing)
   drag_carry,   // one finger carrying a placement: motion only, no button held
@@ -396,14 +399,15 @@ enum class phase {
   two_active    // two-finger pan and pinch, both live
 };
 
-//! What Lua says a one-finger drag starting at a given point means. One finger
-//! never moves the camera: that is two fingers, in every mode, always. So a
-//! drag with nothing under it is not a pan, it is nothing at all.
+//! What Lua says a one-finger drag starting at a given point means. Whether a
+//! drag on open map comes back as `camera` or as `none` is the game's decision,
+//! not this file's: see the touch_one_finger_pan switch in game_ui.lua.
 enum class drag_mode {
   none = 0,    // nothing here to drag; swallow the gesture
   button = 1,  // held left-button drag: room sizing, sliders, window dragging
   wheel = 2,   // scroll the list under the finger
-  carry = 3    // position something on the map; lifting drops it
+  carry = 3,   // position something on the map; lifting drops it
+  camera = 4   // pan the map 1:1, with a flick at the end
 };
 
 constexpr Uint64 long_press_ms = 600;
@@ -504,6 +508,7 @@ const char* phase_name(phase p) {
   switch (p) {
     case phase::idle: return "idle";
     case phase::pending: return "pending";
+    case phase::drag_pan: return "drag_pan";
     case phase::drag_none: return "drag_none";
     case phase::drag_mouse: return "drag_mouse";
     case phase::drag_carry: return "drag_carry";
@@ -694,6 +699,20 @@ void begin_two_active() {
   set_phase(phase::two_active, "two fingers moved");
 }
 
+//! One-finger pan. The delta is measured from the previous reported position,
+//! so the ground under the finger stays under the finger.
+bool pan_to(lua_State* L, float x, float y) {
+  const float dx = x - s.last_x;
+  const float dy = y - s.last_y;
+  s.last_x = x;
+  s.last_y = y;
+  add_sample(dx, dy);
+  if (dx == 0.0f && dy == 0.0f) {
+    return false;
+  }
+  return dispatch(L, dispatch_touch_camera, {dx, dy, 1.0, x, y});
+}
+
 //! Pan and zoom in the same message, so they are applied in the same frame and
 //! neither is locked out by the other. Zoom stays dormant until the fingers
 //! deliberately change separation faster than they are travelling, which is
@@ -799,11 +818,12 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           s.f2_down_y = py;
           set_phase(phase::carry_armed, "second finger on carry");
           break;
+        case phase::drag_pan:
         case phase::drag_none:
-          // The finger was already dragging deliberately, with nothing under
-          // it. A second finger landing can only mean "move the view", so
-          // start immediately rather than making the user re-cross a dead zone
-          // and throwing away the opening travel of the pan.
+          // The finger was already dragging deliberately. A second one landing
+          // can only mean "move the view", so start immediately rather than
+          // making the user re-cross a dead zone, which would throw away the
+          // opening travel of every two-finger gesture begun this way.
           s.f2 = id;
           s.f2x = px;
           s.f2y = py;
@@ -874,6 +894,15 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
             s.last_y = py;
             set_phase(phase::drag_carry, "drag while placing");
             repaint = emit_motion(L, px, py) || repaint;
+          } else if (mode == static_cast<int>(drag_mode::camera)) {
+            // Pan from the original touch point rather than from here, so the
+            // ground under the finger stays under the finger from the first
+            // pixel and the dead-zone travel is not thrown away.
+            set_phase(phase::drag_pan, "drag on the map");
+            reset_samples();
+            s.last_x = s.down_x;
+            s.last_y = s.down_y;
+            repaint = pan_to(L, px, py) || repaint;
           } else {
             // Nothing here to drag. CorsixTH has no drag-box selection, so this
             // is deliberately inert: it emits nothing now and nothing on
@@ -884,6 +913,11 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           }
           break;
         }
+        case phase::drag_pan:
+          if (id == s.f1) {
+            repaint = pan_to(L, px, py) || repaint;
+          }
+          break;
         case phase::drag_none:
           break;
         case phase::drag_mouse:
@@ -991,6 +1025,7 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
             repaint = emit_click(L, 1, s.down_x, s.down_y) || repaint;
           }
           break;
+        case phase::drag_pan:
         case phase::two_active:
           repaint = release_fling(L) || repaint;
           break;
