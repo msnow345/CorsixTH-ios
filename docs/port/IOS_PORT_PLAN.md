@@ -765,6 +765,34 @@ Requirements carried over from the GeneralsX port, each of which was a real bug 
   Check `menu_disappear_counter` / `disappear_counter` (`menu.lua:62-100`) — the auto-hide
   timing is tuned for a mouse and will need adjusting for touch.
 
+- **Long-press cannot catch a moving entity — anchor the gesture to what it started on.**
+  User report: "hard to pick someone up with a long press because they move away too fast. Maybe
+  a double tap could be right click, or another suggestion."
+
+  Diagnose before choosing a gesture. The failure is not that the hold is too slow; it is that
+  the synthetic click is delivered at the ORIGINAL SCREEN POINT when the timer fires, and
+  patients and staff walk, so by then the point is bare floor. A faster gesture only narrows the
+  window — it does not fix the cause, which is why **double-tap is not the answer on its own**:
+  a double-tap on a walking patient misses for exactly the same reason.
+
+  The fix, in priority order:
+  1. **Anchor to the entity, not the coordinate.** Capture what is under the finger at
+     finger-down, and when the gesture fires, deliver the click at that entity's *current*
+     screen position. The game already resolves an entity under the cursor for its highlight and
+     tooltips — reuse that lookup rather than adding a new one.
+  2. **Shorten the hold.** 600 ms was chosen for an RTS; for grabbing a moving person it is
+     long. Tune it on device and say what you settled on.
+  3. Consider whether picking a person up should be a **press-and-drag** at all rather than a
+     long-press — the recogniser already has a `drag_carry` state for placement, and "press a
+     person and drag them" needs no timer and no anchoring. Establish how the engine actually
+     initiates a pick-up first (it is not plain right-click: `game_ui.lua`'s right-click paths
+     are debug-patient walking and aborting a room edit), then map the gesture onto the engine's
+     own mechanism rather than inventing one.
+
+  If you do add double-tap for anything, it must NOT delay ordinary single taps — the user has
+  praised tap responsiveness twice and it is not to be traded away. Fire the first tap
+  immediately and treat a second tap as its own event.
+
 - **The bottom panel's hover-reveal needs a tap-to-reveal, then tap-to-select.** User report:
   "the bottom right bar that has additional menus that appear on hover. I think a single tap on
   this bar should count as a 'hover' and then a second tap should be the selection."
