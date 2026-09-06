@@ -569,6 +569,27 @@ CorsixTH is mouse-driven. Give it a touch layer that feels like an iOS app, foll
 GeneralsX deferred-tap architecture (read `PORTING_PLAYBOOK.md` §6 first — the state machine and
 its rationale transfer directly, the gesture *mapping* does not).
 
+### Superseded during implementation: one finger interacts, two fingers navigate
+
+The gesture mapping below specifies a one-finger drag that pans the map outside placement
+modes and belongs to the active mode inside them. **That distinction was removed by the
+user during Task 7 and no longer describes the shipped behaviour.** What shipped is:
+
+- **One finger interacts** — tap, long press, carry, size, scroll a list. It never moves
+  the camera, in any mode.
+- **Two fingers navigate** — pan by centroid and pinch-zoom, simultaneously, with
+  inertia, in every mode including mid-placement.
+- A one-finger drag with nothing under it is deliberately inert: it emits nothing while
+  it moves and nothing when it lifts. CorsixTH has no drag-box selection, so nothing is
+  lost, and a stray finger can never shift the map out from under a room being sized.
+- Edge scrolling is kept only while something is being carried or sized, where the one
+  finger is occupied.
+- Rotation during a placement is a **second-finger tap**, cycling the existing discrete
+  orientations through `tryNextOrientation`. No new button was added.
+
+Read the rest of this section for the reasoning and the requirements that still stand;
+read `.superpowers/sdd/IOS_PORT_PLAN/task-7-report.md` for what was actually built.
+
 ### Field data: the baseline is already usable — do not regress it
 
 The user has played the current build on the iPad and reports that touch "actually worked
