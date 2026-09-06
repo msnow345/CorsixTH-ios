@@ -30,6 +30,7 @@ SOFTWARE.
 #endif
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string_view>
@@ -77,6 +78,47 @@ Uint32 timer_frame_callback(void*, SDL_TimerID, Uint32 interval) {
   SDL_PushEvent(&e);
   return interval;
 }
+
+#ifdef CORSIX_TH_IOS
+// CorsixTH-iOS @feature 2026-09-06 pace *rendered* frames at the panel refresh
+// rate while the camera is moving. Simulation is untouched: it stays on the
+// 18 ms usertick above. This timer only posts a repaint request, and only while
+// the Lua frame handler reports that something is still animating, so an idle
+// game still repaints at the tick rate. Presentation remains on vsync, so this
+// is not the busy loop that limit_fps == false produces.
+std::atomic<bool> want_display_rate_frames{false};
+
+Uint32 display_frame_callback(void*, SDL_TimerID, Uint32 interval) {
+  if (want_display_rate_frames.load(std::memory_order_relaxed)) {
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_USEREVENT_FRAME;
+    SDL_PushEvent(&e);
+  }
+  return interval;
+}
+
+//! Interval at which to ask for a repaint, in whole milliseconds: half the
+//! frame period of the display showing the window.
+//! Half, so that the pace is set by the vsync inside SDL_RenderPresent rather
+//! than by this timer's millisecond granularity. Asking exactly once per frame
+//! period aliases against vsync and loses frames: measured 112 fps on a 120 Hz
+//! panel at 8 ms, and a solid 120 fps at 4 ms. It is still a hard upper bound,
+//! so this can never become the busy loop that limit_fps == false produces.
+Uint32 display_frame_request_period_ms(SDL_Window* window) {
+  float hz = 0.0f;
+  const SDL_DisplayMode* mode =
+      SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+  if (mode != nullptr) {
+    hz = mode->refresh_rate;
+  }
+  if (hz <= 0.0f) {
+    hz = 60.0f;
+  }
+  Uint32 period = static_cast<Uint32>(500.0f / hz);
+  return period < 1 ? 1 : period;
+}
+#endif
 
 class fps_ctrl {
  public:
@@ -320,6 +362,15 @@ void mainloop(lua_State* L) {
   lua_getfield(L, -1, "video");
   render_target* target = static_cast<render_target*>(lua_touserdata(L, -1));
 
+#ifdef CORSIX_TH_IOS
+  const Uint32 display_frame_period =
+      display_frame_request_period_ms(target->get_window());
+  std::printf("Display frame pacing: repaint requested every %u ms\n",
+              display_frame_period);
+  SDL_TimerID display_frame_timer =
+      SDL_AddTimer(display_frame_period, display_frame_callback, nullptr);
+#endif
+
   while ((wait_error = SDL_WaitEvent(&e))) {
     bool do_frame = false;
     bool do_timer = false;
@@ -487,6 +538,26 @@ void mainloop(lua_State* L) {
           do_timer = true;
           nargs = 0;
           break;
+#ifdef CORSIX_TH_IOS
+        case SDL_USEREVENT_FRAME:
+          do_frame = true;
+          nargs = 0;
+          break;
+        case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
+          // CorsixTH-iOS @feature 2026-09-06 a display cutout insets the
+          // render viewport, so a safe-area change is a render size change.
+          target->on_pixel_size_change();
+
+          last_dispatch = dispatch_window_pixel_size_changed;
+          push_app_dispatch(L, last_dispatch);
+          {
+            render_size size = target->get_size();
+            lua_pushinteger(L, size.width);
+            lua_pushinteger(L, size.height);
+          }
+          nargs = 3;
+          break;
+#endif
         case SDL_USEREVENT_MOVIE_OVER:
           last_dispatch = dispatch_movie_over;
           push_app_dispatch(L, last_dispatch);
@@ -549,8 +620,16 @@ void mainloop(lua_State* L) {
         if (res != LUA_OK) {
           std::fprintf(stderr, "Error in frame callback: %s\n",
                        lua_tostring(L, -1));
+#ifdef CORSIX_TH_IOS
+          want_display_rate_frames.store(false, std::memory_order_relaxed);
+#endif
         } else {
-          do_frame = do_frame || (lua_toboolean(L, -1) != 0);
+          const bool still_animating = lua_toboolean(L, -1) != 0;
+#ifdef CORSIX_TH_IOS
+          want_display_rate_frames.store(still_animating,
+                                         std::memory_order_relaxed);
+#endif
+          do_frame = do_frame || still_animating;
           lua_pop(L, 2);
         }
         infinite_loop_counter = 0;
@@ -567,6 +646,9 @@ void mainloop(lua_State* L) {
   }
 
 leave_loop:
+#ifdef CORSIX_TH_IOS
+  SDL_RemoveTimer(display_frame_timer);
+#endif
   SDL_RemoveTimer(timer);
 }
 

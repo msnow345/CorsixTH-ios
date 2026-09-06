@@ -51,6 +51,10 @@
   </array>
   <key>UIRequiresFullScreen</key>
   <true/>
+  <!-- Allow frame durations shorter than 1/60s so ProMotion panels can run
+       the render loop at their full refresh rate. -->
+  <key>CADisableMinimumFrameDurationOnPhone</key>
+  <true/>
   <key>UIStatusBarHidden</key>
   <true/>
   <key>UIViewControllerBasedStatusBarAppearance</key>
