@@ -75,9 +75,20 @@ These bind every task. A reviewer treats a violation as a defect.
 - `cmake`, `ninja`, `meson`, `pkg-config`, `xcodegen`, `libtool` present via Homebrew.
   `autoconf`/`automake` are **not** installed.
 - `VCPKG_ROOT=$HOME/vcpkg` exists.
-- Connected device: `iPad (27.0)` UDID `00008XXX-XXXXXXXXXXXXXXXX`.
-  Offline: `Mikes iPhone (27.0)` UDID `00008YYY-YYYYYYYYYYYYYYYY`.
-- Simulators available (iPad Pro 11-inch (M5) 26.5 etc.) for fast iteration where useful.
+- Test devices (both paired to this host, iOS 26/"27.0"):
+  - **iPad Pro 11-inch (M5)** (`iPad17,1`) — hardware UDID `00008XXX-XXXXXXXXXXXXXXXX`,
+    devicectl identifier `AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE`. 2420x1668 native @2x
+    (1210x834 pt). Primary target.
+  - **iPhone 17 Pro Max** (`iPhone18,2`) — devicectl identifier
+    `11111111-2222-3333-4444-555555555555`, hardware UDID `00008YYY-YYYYYYYYYYYYYYYY`.
+    2868x1320 native @3x (956x440 pt) — this is the device that exercises the UI-scale cap
+    edge case in Task 6 (1320/480 = 2.75, so the cap is 2 while the display scale is 3).
+  - Physical device availability depends on the user having it plugged in; ask via the
+    controller rather than assuming, and say in your report which device you actually tested on.
+- A code-signing identity for automatic signing exists on this host; discover it with
+  `security find-identity -v -p codesigning` (the value in parentheses is the team id) rather
+  than hard-coding one. The controller will also supply it in your dispatch.
+- Simulators available (iPad Pro 11-inch (M5) 26.5, iPad Air, iPad mini) for fast iteration.
 - Build outputs go under `build/ios*` (already git-ignored patterns: verify and extend
   `.gitignore` if not).
 
