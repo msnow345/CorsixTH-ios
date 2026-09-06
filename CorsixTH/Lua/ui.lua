@@ -1072,7 +1072,8 @@ function UI:onPinchUpdate()
   return false
 end
 
---! Does any window in this subtree respond to the mouse wheel?
+--! CorsixTH-iOS @feature 2026-09-07 does any window in this subtree respond to
+--! the mouse wheel? A drag inside one scrolls it rather than dragging it.
 local function wantsWheelScroll(window)
   if window.scrollbars and #window.scrollbars > 0 then
     return true
@@ -1090,7 +1091,7 @@ local function wantsWheelScroll(window)
   return false
 end
 
---! Find the topmost dialog under a screen point.
+--! CorsixTH-iOS @feature 2026-09-07 find the topmost dialog under a point.
 --!param x,y (number) Screen position.
 --!return (Window, number, number) The window and the point in its own space,
 -- or nil when the point is not over any dialog.
@@ -1116,7 +1117,7 @@ UI.TOUCH_DRAG_WHEEL = 2
 UI.TOUCH_DRAG_CARRY = 3
 UI.TOUCH_DRAG_CAMERA = 4
 
---! Decide what a one-finger drag beginning at this point means.
+--! CorsixTH-iOS @feature 2026-09-07 decide what a one-finger drag here means.
 --! Called by the iOS touch layer the instant a press passes the drag dead zone
 --! and before any button has been committed, so the answer can still change
 --! what the gesture becomes.
@@ -1140,29 +1141,31 @@ function UI:onTouchDragQuery(x, y)
   return UI.TOUCH_DRAG_BUTTON
 end
 
---! A second finger tapped while one finger was placing something. Nothing to
---! rotate outside a game.
+--! CorsixTH-iOS @feature 2026-09-07 second-finger tap while placing: rotate.
+--! Nothing to rotate outside a game.
 function UI:onTouchRotate()
   return false
 end
 
---! Where a long press should deliver its click. Nothing outside a game walks
---! away from where it was pressed, so the press point stands.
+--! CorsixTH-iOS @bugfix 2026-09-07 where a long press should deliver its click.
+--! Nothing outside a game walks away from where it was pressed, so the press
+--! point stands.
 function UI:onTouchLongPressAnchor()
   return nil
 end
 
---! Direct-manipulation camera gesture. Only the in-game UI has a camera.
+--! CorsixTH-iOS @feature 2026-09-07 direct-manipulation camera gesture.
+--! Only the in-game UI has a camera.
 function UI:onTouchCamera()
   return false
 end
 
---! A camera gesture ended with the fingers still moving.
+--! CorsixTH-iOS @feature 2026-09-07 a camera gesture ended, fingers moving.
 function UI:onTouchFling()
   return false
 end
 
---! A finger landed; catch anything the camera was still doing.
+--! CorsixTH-iOS @feature 2026-09-07 a finger landed; catch a coasting camera.
 function UI:onTouchCatch()
   return false
 end
