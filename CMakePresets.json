@@ -154,6 +154,61 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_MAKE_PROGRAM": "/usr/bin/make"
       }
+    },
+    {
+      "name": "ios-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_SYSTEM_PROCESSOR": "arm64",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.0",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/CMake/ios/triplets",
+        "WITH_MOVIES": "OFF",
+        "WITH_UPDATE_CHECK": "OFF",
+        "WITH_MIDI_DEVICE": "OFF",
+        "WITH_LUAJIT": "OFF",
+        "WITH_TRACY": "OFF",
+        "BUILD_ANIMVIEW": "OFF",
+        "BUILD_TOOLS": "OFF",
+        "ENABLE_UNIT_TESTS": "OFF",
+        "ENABLE_SANITIZERS": "OFF",
+        "USE_SOURCE_DATADIRS": "OFF",
+        "SEARCH_LOCAL_DATADIRS": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "ios-device",
+      "displayName": "iOS device (arm64, iOS 16.0)",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/build/ios-device",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "VCPKG_TARGET_TRIPLET": "arm64-ios-min16",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/ios-deps/device"
+      }
+    },
+    {
+      "name": "ios-simulator",
+      "displayName": "iOS simulator (arm64, iOS 16.0)",
+      "inherits": "ios-base",
+      "binaryDir": "${sourceDir}/build/ios-simulator",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "VCPKG_TARGET_TRIPLET": "arm64-ios-simulator-min16",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/ios-deps/simulator"
+      }
+    },
+    {
+      "name": "ios-device-xcode",
+      "displayName": "iOS device (arm64, iOS 16.0, Xcode generator)",
+      "inherits": "ios-device",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build/ios-device-xcode"
     }
   ],
   "buildPresets": [
@@ -196,6 +251,21 @@
       "name": "macos-x64-rel",
       "configurePreset": "macos-x64-rel",
       "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ios-device",
+      "configurePreset": "ios-device",
+      "configuration": "Release"
+    },
+    {
+      "name": "ios-simulator",
+      "configurePreset": "ios-simulator",
+      "configuration": "Release"
+    },
+    {
+      "name": "ios-device-xcode",
+      "configurePreset": "ios-device-xcode",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
