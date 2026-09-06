@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- CorsixTH-iOS @build 2026-09-06 Info.plist for the flat iOS/iPadOS app bundle. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleIdentifier</key>
+  <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundleDisplayName</key>
+  <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+  <key>CFBundleVersion</key>
+  <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>iPhoneOS</string>
+  </array>
+  <key>LSRequiresIPhoneOS</key>
+  <true/>
+  <key>MinimumOSVersion</key>
+  <string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
+  <key>UIDeviceFamily</key>
+  <array>
+    <integer>1</integer>
+    <integer>2</integer>
+  </array>
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>arm64</string>
+  </array>
+  <!-- Global constraint 8: landscape only. -->
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>UIRequiresFullScreen</key>
+  <true/>
+  <key>UIStatusBarHidden</key>
+  <true/>
+  <key>UIViewControllerBasedStatusBarAppearance</key>
+  <false/>
+  <!-- An empty UILaunchScreen dict opts the app in to the device's native
+       resolution; without it iOS renders into a scaled-up compatibility frame. -->
+  <key>UILaunchScreen</key>
+  <dict/>
+  <!-- Global constraint 9: writable state under Documents/ must be reachable
+       from the Files app. -->
+  <key>UIFileSharingEnabled</key>
+  <true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key>
+  <true/>
+  <key>UIApplicationSupportsIndirectInputEvents</key>
+  <true/>
+</dict>
+</plist>

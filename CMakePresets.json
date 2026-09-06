@@ -177,6 +177,7 @@
         "ENABLE_SANITIZERS": "OFF",
         "USE_SOURCE_DATADIRS": "OFF",
         "SEARCH_LOCAL_DATADIRS": "ON",
+        "FETCH_UNICODE_FONT": "ON",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
