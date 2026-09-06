@@ -22,16 +22,27 @@ local ipairs, math_floor, unpack, select, assert
     = ipairs, math.floor, unpack, select, assert
 local TH = require("TH")
 
--- CorsixTH-iOS @bugfix 2026-09-07 the menu bar is revealed by hovering the
--- pointer at the top of the screen, or by the ingame_showmenubar hotkey, which
--- defaults to escape. A tablet has neither: the emulated pointer only moves
--- while a finger is down, so the bar vanishes the moment you lift to tap an
--- item, and there is no escape key. That leaves save, load, options and quit
--- unreachable. Give touch a press in the top strip that reveals the bar and
--- pins it open until something dismisses it.
-local touch_input = TH.GetCompileOptions().os == "ios"
--- Height of that strip, in unscaled units. The bar itself is 16.
-local touch_reveal_strip = 24
+-- CorsixTH-iOS @bugfix 2026-09-07 how the menu bar is reached by touch.
+--
+-- The bar is revealed by hovering the pointer at the top of the screen, or by
+-- the ingame_showmenubar hotkey, which defaults to escape. A tablet has
+-- neither, which left save, load, options and quit unreachable.
+--
+-- It needs no reveal mechanism of its own, because the touch layer supplies the
+-- missing hover: every synthetic tap sends a motion before its button-down
+-- (sdl_core.cpp, emit_click), so a tap in the top strip runs onMouseMove first
+-- and that is what sets `visible` and calls appear(). And it then *stays*
+-- revealed, because disappear() is only ever reached from onMouseMove and touch
+-- produces no motion at all once the finger lifts -- so there is no hover-exit
+-- to start the auto-hide countdown, and the bar waits indefinitely for the tap
+-- that opens a menu.
+--
+-- A pin flag was written here first and deleted: `visible` was already true by
+-- the time onMouseDown ran, so it never fired. Left in, it would have looked
+-- like the thing keeping the bar up while doing nothing at all.
+--
+-- What does still need saying: the strip a tap must land in is the hover band
+-- from onMouseMove below, `self.height * s + padding * s`, and nothing else.
 
 --! The ingame menu bar which sits (nominally hidden) at the top of the screen.
 class "UIMenuBar" (Window)
@@ -360,38 +371,13 @@ function UIMenuBar:appear()
 end
 
 function UIMenuBar:disappear()
-  -- Pinned open for touch: there is no hover to keep it alive, so it stays
-  -- until it is dismissed deliberately or an item is chosen.
-  if self.pinned then
-    return
-  end
   if not self.disappear_counter then
     self.disappear_counter = 100
   end
 end
 
---! Reveal the bar and hold it revealed, or release it.
---!param pinned (boolean) Whether to hold the bar open.
-function UIMenuBar:setPinned(pinned)
-  self.pinned = pinned
-  if pinned then
-    self:appear()
-  else
-    self:disappear()
-  end
-end
-
 function UIMenuBar:onMouseDown(button, x, y)
-  if button ~= "left" then
-    return
-  end
-  if not self.visible then
-    if touch_input and y >= 0 and y < touch_reveal_strip * TheApp.gfx:getUIScale() and
-        x >= 0 and x < self.width then
-      self:setPinned(true)
-      self.ui:playSound("selectx.wav")
-      return true
-    end
+  if button ~= "left" or not self.visible then
     return
   end
   local repaint = false
@@ -415,11 +401,6 @@ function UIMenuBar:onMouseDown(button, x, y)
     self.active_menu = new_active
     repaint = true
     self.ui:playSound("selectx.wav")
-  end
-  if self.pinned and not new_active and y >= touch_reveal_strip * TheApp.gfx:getUIScale() then
-    -- Pressed away from the bar with nothing open: that is the dismissal.
-    self:setPinned(false)
-    repaint = true
   end
   return repaint
 end
@@ -468,7 +449,6 @@ function UIMenuBar:onMouseUp(button, x, y)
           item.handler(item, self.active_menu)
         end
         if y > 22 * s then
-          self.pinned = false
           self:disappear()
         end
         self.active_menu = false
