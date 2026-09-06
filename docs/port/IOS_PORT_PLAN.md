@@ -471,11 +471,46 @@ is computed against, and it works out for every device we care about:
 - Fullscreen/orientation: the app is landscape-only and full screen. Verify no window
   decoration assumptions leak through (`th_gfx_sdl.cpp:578-625` branches on
   `SDL_WINDOW_FULLSCREEN`).
-- Frame rate: allow up to 120 Hz on ProMotion panels (`CADisableMinimumFrameDurationOnPhone`
-  from Task 4 plus whatever the SDL renderer needs). CorsixTH's simulation is tick-driven from
-  an `SDL_AddTimer` (`sdl_core.cpp:301`), so game speed must be unaffected by render rate —
-  verify explicitly that raising the frame rate does not speed the game up (the equivalent bug
-  bit the GeneralsX port hard).
+### Frame rate: 120 Hz on ProMotion
+
+Read the loop before changing anything. The architecture is already decoupled, unlike the
+GeneralsX case:
+
+- `usertick_period_ms = 18` (`CorsixTH/Src/lua_sdl.h:43`) drives an `SDL_AddTimer`
+  (`sdl_core.cpp:302`) that posts `SDL_USEREVENT_TICK` → `"timer"` → `App:onTick`
+  (`app.lua:1290`) → `World:onTick` + `UI:onTick`. **All** simulation, sprite animation and
+  camera scrolling advance there, at ~55.6 Hz.
+- `"frame"` → `App:drawFrame` (`app.lua:1330`) only renders: `video:startFrame()`,
+  `ui:draw()`, `video:endFrame()`. It advances no game state. So drawing more often cannot
+  change game speed. (The one exception is `moviePlayer:refresh()` inside `drawFrame` — movies
+  are off for v1, but if they are ever enabled, check the movie clock is timestamp-based.)
+- `App:onTick` returns `true` unconditionally ("tick events always result in a repaint"), and
+  with `limit_fps = true` (the default, `sdl_core.cpp:82`) a frame is drawn only when something
+  requests one. **The effective frame-rate ceiling today is therefore the tick rate, ~55 fps** —
+  not vsync, not the panel.
+- `limit_fps = false` renders in a tight `while (!SDL_PollEvent(nullptr))` busy loop
+  (`sdl_core.cpp:542`). That is benchmark mode. **Never ship it on a battery-powered device.**
+
+So reaching 120 Hz means requesting frames independently of the 18 ms tick, and it only buys
+anything for continuously-moving things — the camera. Character animation is fixed-frame 1997
+sprite data advancing every 18 ms; drawing it twice as often shows the same image twice.
+
+Work:
+
+- Enable up to 120 Hz on ProMotion panels (`CADisableMinimumFrameDurationOnPhone` from Task 4
+  plus whatever the SDL renderer needs). Keep the renderer's vsync present
+  (`th_gfx_sdl.cpp:527` — `present_immediate ? 0 : 1`); present-on-vsync at 120 Hz is the goal,
+  never a spin loop.
+- Drive rendered frames at display rate while leaving the tick at 18 ms. Keep the change small
+  and platform-guarded; do not restructure the loop.
+- Coordinate with Task 7: the payoff is that camera pan/pinch/inertia update **per rendered
+  frame** from touch deltas rather than per tick. Note that today momentum decays per tick
+  (`game_ui.lua:onTick`) and `scrollMap` steps in whole pixels carrying the fraction over
+  (`game_ui.lua:597-605`), which at native iPad resolution may read as slight stepping —
+  sub-pixel camera offset is the fix if it visibly does.
+- **Verify game speed is unaffected** despite the architecture making it structurally safe:
+  measure in-game clock advance over a fixed wall-clock interval at the capped and uncapped
+  rates and show the numbers. Structural safety is not evidence.
 - Handle rotation between landscape-left and landscape-right cleanly (the window-resize path
   already exists, `sdl_core.cpp:424-457`).
 
