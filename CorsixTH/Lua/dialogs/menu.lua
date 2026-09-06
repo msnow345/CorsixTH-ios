@@ -61,6 +61,11 @@ function UIMenuBar:UIMenuBar(ui, map_editor)
   self.width = app.video:getRenderSize()
   self.height = 16
   self.visible = false
+  -- CorsixTH-iOS @feature 2026-09-07 a menu item previews while a finger is
+  -- held on it and activates when the finger lifts, so the long press must not
+  -- turn into a right click the item ignores and then swallow that lift. The
+  -- touch layer reads this through UI:onTouchDragQuery; see TOUCH_DRAG_PREVIEW.
+  self.touch_hold_previews = true
   local selected_label_color = { red = 40, green = 40, blue = 250 }
   self.panel_sprites = app.gfx:loadSpriteTable("Data", "PullDV", true)
   self.white_font = app.gfx:loadFontAndSpriteTable("QData", "Font01V", nil, nil, { apply_ui_scale = true })
@@ -253,6 +258,29 @@ function UIMenuBar:drawMenu(menu, canvas)
   end
 end
 
+--! CorsixTH-iOS @bugfix 2026-09-07 this window draws with fonts and sprite
+--! lists rather than panels, so the inherited Window:hitTest -- which only
+--! knows about panels and child windows -- reported false for every point on
+--! it, and the bar was invisible to everything that asks "which window is under
+--! this finger". That is why its item highlight was never released on lift, and
+--! why a drag across an open menu panned the map behind it instead of moving
+--! the selection.
+--!param x,y (number) Position in this window's space.
+--!return (boolean) Whether the bar or one of its open menus is under the point.
+function UIMenuBar:hitTest(x, y)
+  local s = TheApp.gfx:getUIScale()
+  if self.visible and x >= 0 and x < self.width and
+      y >= 0 and y < self.height * s then
+    return true
+  end
+  for _, menu in ipairs(self.open_menus) do
+    if menu:hitTest(x, y, 0) then
+      return true
+    end
+  end
+  return false
+end
+
 function UIMenuBar:hitTestBar(x, y)
   local s = TheApp.gfx:getUIScale()
   if y < 16 * s then
@@ -271,11 +299,21 @@ function UIMenuBar:hitTestBar(x, y)
 end
 
 function UIMenuBar:onMouseMove(x, y, dx, dy)
-  -- CorsixTH-iOS @bugfix 2026-09-07 this window uses hover to reveal, and what
-  -- it is showing was deliberately opened by a tap. Releasing the touch hover
-  -- must not take it away again with the same lift that opened it.
+  -- CorsixTH-iOS @bugfix 2026-09-07 releasing the touch hover must drop the
+  -- item highlight -- it followed a finger that has gone -- but must NOT take
+  -- the bar itself away, because what is open was deliberately opened by a tap
+  -- rather than hovered into. So this does the first and skips the rest, which
+  -- is what would have dismissed it.
   if self.ui.touch_clearing_hover then
-    return false
+    local cleared = false
+    for _, menu in ipairs(self.open_menus) do
+      if menu.hover_index ~= 0 then
+        menu.hover_index = 0
+        menu.prev_hover_index = nil
+        cleared = true
+      end
+    end
+    return cleared
   end
   local s = TheApp.gfx:getUIScale()
   local padding = 6

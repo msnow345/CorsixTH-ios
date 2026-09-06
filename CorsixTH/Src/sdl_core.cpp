@@ -418,13 +418,24 @@ enum class drag_mode {
   //! except that the long press is not suppressed: for a picked-up member of
   //! staff there is no cancel button anywhere on screen, so taking the long
   //! press away would leave someone holding a person they cannot put down.
-  carry_cancellable = 5
+  carry_cancellable = 5,
+  //! A control that previews while held and acts on release -- a menu item.
+  //! Drags like `button`, but is never turned into a right click: holding one
+  //! is how you look at it before committing, so the hold must stay a hold and
+  //! the lift must still activate it.
+  preview = 6
 };
 
 //! Both carry modes drag the same way.
 bool is_carry(int mode) {
   return mode == static_cast<int>(drag_mode::carry) ||
          mode == static_cast<int>(drag_mode::carry_cancellable);
+}
+
+//! Modes that drag as a held left button.
+bool is_button_drag(int mode) {
+  return mode == static_cast<int>(drag_mode::button) ||
+         mode == static_cast<int>(drag_mode::preview);
 }
 
 //! 600 ms is an RTS figure, chosen where the thing under the finger is not
@@ -1035,7 +1046,7 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           // release the held tap first so it cannot arrive after this gesture.
           repaint = flush_held_tap(L) || repaint;
           const int mode = query_drag_mode(L, s.down_x, s.down_y);
-          if (mode == static_cast<int>(drag_mode::button)) {
+          if (is_button_drag(mode)) {
             // Anchor the press at the original touch point: room sizing starts
             // its rectangle where the finger first landed.
             repaint = emit_motion(L, s.down_x, s.down_y) || repaint;
@@ -1270,14 +1281,29 @@ bool poll_long_press(lua_State* L) {
     return repaint_expired;
   }
   bool repaint_held = flush_held_tap(L) || repaint_expired;
-  if (query_drag_mode(L, s.down_x, s.down_y) ==
-      static_cast<int>(drag_mode::carry)) {
+  const int held_mode = query_drag_mode(L, s.down_x, s.down_y);
+  if (held_mode == static_cast<int>(drag_mode::carry)) {
     // Right click undoes a placement, and holding still is exactly what someone
     // lining an object up does. Take the long press out of every placement
     // mode rather than have it throw the placement away mid-aim. The phase is
     // deliberately left alone, so this finger can still tap or start a carry.
+    //
+    // Matched exactly, so a `carry_cancellable` -- a person in hand, with no
+    // cancel button anywhere on screen -- keeps the long press that puts them
+    // back down.
     s.long_press_suppressed = true;
     log_event("long press suppressed while placing");
+    return repaint_held;
+  }
+  if (held_mode == static_cast<int>(drag_mode::preview)) {
+    // A menu item. Holding one is how you see what you are about to activate,
+    // so the hold must not turn into a right click the item ignores and then
+    // swallow the lift that was going to choose it. The phase is left in
+    // `pending`, so the highlight the press already applied stays up for as
+    // long as the finger does, sliding to another item still works, and the
+    // release still activates whatever is under it.
+    s.long_press_suppressed = true;
+    log_event("long press suppressed: held control previews instead");
     return repaint_held;
   }
   // Follow whatever was under the finger, if it has walked off since.

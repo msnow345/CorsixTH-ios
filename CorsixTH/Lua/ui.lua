@@ -1121,6 +1121,10 @@ UI.TOUCH_DRAG_CARRY = 3
 UI.TOUCH_DRAG_CAMERA = 4
 -- A carry whose only way out is a right click, so the long press must survive.
 UI.TOUCH_DRAG_CARRY_CANCELLABLE = 5
+-- A control that previews while held and acts on release. Windows opt in with
+-- touch_hold_previews rather than being named here, so a second one costs a
+-- field rather than an edit to this file.
+UI.TOUCH_DRAG_PREVIEW = 6
 
 --! CorsixTH-iOS @feature 2026-09-07 decide what a one-finger drag here means.
 --! Called by the iOS touch layer the instant a press passes the drag dead zone
@@ -1132,6 +1136,9 @@ function UI:onTouchDragQuery(x, y)
   local window, wx, wy = self:_windowAt(x, y)
   if not window then
     return UI.TOUCH_DRAG_NONE
+  end
+  if window.touch_hold_previews then
+    return UI.TOUCH_DRAG_PREVIEW
   end
   if wantsWheelScroll(window) then
     -- Unless the finger is on the scrollbar itself, in which case dragging the
