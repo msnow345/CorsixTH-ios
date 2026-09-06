@@ -696,13 +696,15 @@ bool flush_pending_release(lua_State* L) {
     return false;
   }
   held_release.active = false;
-  bool repaint = emit_button(L, false, held_release.button, held_release.x,
-                             held_release.y);
+  const float x = held_release.x;
+  const float y = held_release.y;
+  bool repaint = emit_button(L, false, held_release.button, x, y);
   // A finger does not move away afterwards the way a mouse does, so the hover
   // the tap's leading motion applied would otherwise stay applied for ever --
   // every button tapped left looking hovered. Touch hover is transient: it
-  // lasts for the touch and is released with it.
-  repaint = dispatch(L, dispatch_touch_hover_end, {}) || repaint;
+  // lasts for the touch and is released with it. The release point goes with
+  // it, because only the window under it can have been left hovered.
+  repaint = dispatch(L, dispatch_touch_hover_end, {x, y}) || repaint;
   return repaint;
 }
 

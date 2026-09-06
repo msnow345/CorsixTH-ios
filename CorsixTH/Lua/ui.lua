@@ -33,6 +33,9 @@ local TH = require("TH")
 -- UI is persisted into savegames, and where the game is being played is not a
 -- property of the save.
 local touch_input = TH.GetCompileOptions().os == "ios"
+-- Matches the gesture log in sdl_core.cpp: which single window, if any, had its
+-- hover released when a tap lifted.
+local touch_log = touch_input and os.getenv("CORSIXTH_TOUCH_LOG") ~= nil
 local SDL = require("sdl")
 local WM = SDL.wm
 local lfs = require("lfs")
@@ -1179,37 +1182,55 @@ end
 --! never sends the motion that moves *away*, so that hover stayed applied and
 --! every button tapped was left looking hovered.
 --!
---! Cleared by driving each dialog's own onMouseMove with a point away from it,
---! which is the mechanism the game already uses to un-hover things, rather than
---! by reaching into per-dialog hover fields that are all named differently. The
---! screen centre is used because the edges are not inert: the top edge reveals
---! the menu bar and the outer band arms edge scrolling.
+--! Cleared by driving a dialog's own onMouseMove with a point outside it, which
+--! is the mechanism the game already uses to un-hover things, rather than by
+--! reaching into per-dialog hover fields that are all named differently.
 --!
---! GameUI:onMouseMove is deliberately NOT called -- only the dialogs are -- so
+--! Driven for ONE window: the one under the release point. Broadcasting a
+--! phantom pointer position to every open window is not a safe version of this.
+--! Every hover-driven dialog computes its hover from whatever coordinate it is
+--! handed, so a made-up one lands inside somebody's hover band sooner or later
+--! and silently changes a selection in a dialog the user never touched --
+--! UIFurnishCorridor's band contains its own centre, so a screen-centre sweep
+--! moved its list selection, played its hover sound and swapped its preview on
+--! every unrelated tap. The dialogs that escaped did so by the luck of their
+--! geometry, which is not a guard.
+--!
+--! Scoping to the tapped window is also sufficient, not merely safer: the tap's
+--! own leading motion already ran every window's onMouseMove at the real press
+--! point, which cleared the hover of everything the finger was not on. The only
+--! window that can be left hovered is the one it was on.
+--!
+--! The point handed over is negative, which is outside every window's own local
+--! bounds and so fails every hover band without needing to know where any of
+--! them are. It also lands in Window.cursor_x, which three dialogs consult in
+--! onMouseWheel; harmless, because a wheel only ever arrives from a drag, and
+--! the touch layer emits a motion at the real position before each one.
+--!
+--! GameUI:onMouseMove is deliberately NOT called -- only the dialog is -- so
 --! this cannot re-resolve the world entity under the cursor, play a hover
 --! sound, or arm anything on the map from a position no finger is at.
+--!param x,y (number) Where the tap was released.
 --!return (boolean) Whether anything needs redrawing.
-function UI:onTouchHoverEnd()
-  if not self.windows then
+function UI:onTouchHoverEnd(x, y)
+  local window = self:_windowAt(x, y)
+  self.tooltip = nil
+  self.tooltip_counter = nil
+  if touch_log then
+    print(("[hover] release at %.0f,%.0f -> %s"):format(x, y,
+        window and ("cleared " .. (class.type(window) or "?")) or "no window under it"))
+    io.stdout:flush()
+  end
+  if not window then
     return false
   end
-  local scr_w, scr_h = self.app.video:getRenderSize()
-  local x, y = scr_w / 2, scr_h / 2
   -- Windows that use hover to *reveal* something check this and opt out: what
   -- they are showing was deliberately opened and is not a highlight following a
   -- finger that has gone.
   self.touch_clearing_hover = true
-  local repaint = false
-  for _, window in ipairs(self.windows) do
-    local s = window.apply_ui_scale and TheApp.gfx:getUIScale() or 1
-    if window:onMouseMove(x - window.x * s, y - window.y * s, 0, 0) then
-      repaint = true
-    end
-  end
+  local repaint = window:onMouseMove(-1, -1, 0, 0)
   self.touch_clearing_hover = false
-  self.tooltip = nil
-  self.tooltip_counter = nil
-  return repaint
+  return repaint and true or false
 end
 
 --! CorsixTH-iOS @feature 2026-09-07 should this tap wait for a second one?
