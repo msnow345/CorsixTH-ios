@@ -658,11 +658,54 @@ Requirements carried over from the GeneralsX port, each of which was a real bug 
   drag-box selection, so one-finger panning is free to exist and is the fastest way to nudge the
   view — but it is the gesture that yields when a mode needs it (below). Two-finger pan is the
   one that always works.
-- **Pinch plumbing:** pinch is already implemented in Lua via the SDL pinch events. Verify it
-  fires from real touches on device (SDL's iOS backend must actually synthesise
-  `SDL_EVENT_PINCH_*` from touches — if it does not, generate the pinch events, or drive zoom
-  directly, from the touch layer) and retune `game_ui.lua:34`'s pinch factor for fingers rather
-  than a trackpad.
+- **Pinch plumbing, and why the current model will not feel right.** The user's explicit bar is
+  "drag to pan and zoom, just as smooth as Generals is". The existing implementation cannot
+  reach that, and the reason is structural rather than a tuning problem:
+
+  `GameUI:onPinchUpdate(scale)` (`game_ui.lua:764`) does not zoom. It accumulates into a
+  velocity: `current_momentum.z = current_momentum.z + (scale - 1) * pinch_zoom_sensitivity`.
+  That accumulator is then applied once per 18 ms tick in `GameUI:onTick` via
+  `world:adjustZoom(current_momentum.z)` and decayed by `self.momentum`. `World:adjustZoom`
+  (`world.lua`) further distorts it through a `zoom_speed` config factor and a gaussian
+  `modifier`. So the zoom your fingers describe is not the zoom applied, it arrives a tick late,
+  and it keeps drifting after your fingers stop. That is a flick-zoom model; Generals' is direct
+  manipulation.
+
+  **The fix is smaller than it sounds, because the hard part already exists.**
+  `GameUI:setZoom(factor, follow_cursor)` (`game_ui.lua:223-249`) already implements correctly
+  anchored zoom: it takes a reference screen point, converts it to world coordinates, applies
+  the new zoom factor, converts back, and scrolls so that the same world point stays under the
+  same screen point. That is exactly "the ground under your fingers stays under your fingers".
+  It just needs to be driven properly:
+
+  1. Give `setZoom` an explicit anchor point rather than only the cursor-or-centre choice at
+     `game_ui.lua:242`, and pass it the **two-finger centroid** from the touch layer.
+  2. Apply pinch scale **directly** — `setZoom(zoom_factor * scale, centroid)` — instead of
+     accumulating into `current_momentum.z`. Bypass `adjustZoom`'s `zoom_speed` and gaussian
+     modifier for touch pinch; those exist to shape discrete mouse-wheel ticks, and a pinch is
+     already a continuous ratio.
+  3. Keep momentum for the **release flick only**, not during the gesture.
+  4. Apply on the rendered frame, not the 18 ms tick (see Task 6's frame-rate work), so the
+     motion is smooth at 120 Hz.
+  5. Preserve the existing zoom clamps (`makeVisibleDiamond` bounds, the minimum-zoom logic at
+     `game_ui.lua:206-222,279`), and the `getWindowDisplayScale` factor baked into `ezf` — the
+     effective zoom is `zoom_factor * display_scale`, which matters once Task 6 runs at native
+     resolution.
+
+  Also verify SDL's iOS backend actually synthesises `SDL_EVENT_PINCH_*` from real touches. If
+  it does not, drive the zoom from your own two-finger tracking rather than depending on it.
+
+- **Read the Generals implementation before designing yours.** It is in the sibling repo at
+  `../GeneralsX/`, and the relevant files are:
+  `GeneralsMD/Code/GameEngineDevice/Source/SDL3GameEngine.cpp` (the touch state machine, pinch
+  handling, and lifecycle watch), `Core/GameEngine/Source/GameClient/View.cpp` and
+  `Core/GameEngine/Include/GameClient/View.h` (the `scrollByWorld` world-space scroll
+  primitive), and `Core/GameEngineDevice/Source/W3DDevice/GameClient/W3DView.cpp`. Its README
+  documents the feel targets: 1:1 direct manipulation, inertia decaying at 0.998/ms
+  (UIScrollView's rate) with release velocity measured over a real 60 ms window from
+  timestamped samples rather than a per-frame filter, coast length linear in release speed with
+  no threshold cliff, continuous anchored pinch, and pan and zoom engaging together with zoom
+  required to out-pace pan. Adapt the design; do not copy the code — the engines differ.
 - **Drag on lists, dropdowns and scrollable panels** → scroll them directly. Scrollbar thumbs
   are a few points wide at these resolutions; dragging the content is the only usable gesture.
   Prefer a Lua-side change in the relevant widgets over faking wheel events if that is cleaner.
