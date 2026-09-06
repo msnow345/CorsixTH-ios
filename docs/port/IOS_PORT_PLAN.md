@@ -569,6 +569,30 @@ CorsixTH is mouse-driven. Give it a touch layer that feels like an iOS app, foll
 GeneralsX deferred-tap architecture (read `PORTING_PLAYBOOK.md` §6 first — the state machine and
 its rationale transfer directly, the gesture *mapping* does not).
 
+### Field data: the baseline is already usable — do not regress it
+
+The user has played the current build on the iPad and reports that touch "actually worked
+pretty well, although it was clearly just moving the mouse around." That is SDL3's built-in
+touch-as-mouse emulation, which synthesises mouse events from touches (marked
+`which == SDL_TOUCH_MOUSEID`). Consequences for your design:
+
+- **Simple taps on buttons already work.** Your starting point is not "no input" but "adequate
+  single-touch input". Anything you build must be at least as reliable as this for a plain tap,
+  or it is a regression the user will notice immediately. Test taps first and often.
+- **But the emulation presses immediately on finger-down**, which is precisely the premature
+  button-down failure this task exists to fix: a two-finger gesture's first finger has already
+  delivered a real click before the second finger arrives. Expect stray clicks today.
+- The plan requires you to drop `SDL_TOUCH_MOUSEID` events once your own translation is in
+  place. Do that as one switch-over, not a half-state where both paths deliver events.
+- **Hover matters.** SDL's emulation moves the pointer, so CorsixTH's hover-dependent UI
+  (button highlights, tooltips) updates as a side effect. Your synthetic sequence must deliver
+  a motion event *before* the button-down for the same reason the GeneralsX port had to — or
+  buttons stop highlighting and some UI stops responding.
+- **The cursor is now a visible artefact.** The game draws its own cursor sprite, which with
+  touch sits wherever the last tap landed and reads as a stuck mouse pointer. Decide what it
+  should do on touch (hide it, or keep it only while a finger is down) and note that
+  `cursor_scale` already exists in config. Judge it on device.
+
 ### Architecture
 
 Translate touches into synthetic SDL mouse events injected through the same path real mouse
