@@ -93,6 +93,9 @@ function App:App()
   self.check_for_updates = TH.GetCompileOptions().update_check
   self.idle_tick = 0
   self.window_active_status = false -- whether window is in focus, set after App:init
+  -- CorsixTH-iOS @feature 2026-09-08 true on iOS/iPadOS. Read by the dialogs
+  -- that have to leave out a control the platform cannot honour.
+  self.ios = SDL.ios or false
 end
 
 function App:setCommandLine(...)
@@ -2076,11 +2079,23 @@ function App:exit()
   -- Save config before exiting
   self:saveConfig()
   self:saveHotkeys()
+  -- CorsixTH-iOS @bugfix 2026-09-08 an iOS app must never quit itself. Doing so
+  -- left the app on screen with a dead render loop -- a frozen last frame the
+  -- player had to force close from the app switcher -- and terminating the
+  -- process outright is recorded by iOS as a crash. Apple's guidance is that an
+  -- app never offers a control that quits it; the player leaves with the home
+  -- gesture and the app is suspended, not closed. No iOS UI reaches this any
+  -- more (the main menu's Exit item is not built), so this is only a backstop
+  -- for a hotkey; the config has been saved, which is all it was for.
+  if self.ios then return end
   SDL.quit()
 end
 
 --! Exits the game completely without saving the config i.e. Alt+F4 for Quit Application
 function App:abandon()
+  -- CorsixTH-iOS @bugfix 2026-09-08 see App:exit. Alt+F4 from an attached
+  -- keyboard reaches this; on iOS it must not take the app down.
+  if self.ios then return end
   SDL.quit()
 end
 

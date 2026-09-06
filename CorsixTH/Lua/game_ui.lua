@@ -1827,6 +1827,15 @@ end
 function GameUI:quit(mapeditor)
   local msg = mapeditor and _S.confirmation.quit_mapeditor or _S.confirmation.quit
   self:addWindow(UIConfirmDialog(self, false, msg, --[[persistable:gameui_confirm_quit]] function()
+    -- CorsixTH-iOS @bugfix 2026-09-08 this item says QUIT and, since UI.quit is
+    -- overridden here, has always meant "abandon this game and go back to the
+    -- main menu" rather than "close the program". On iOS it is now the only
+    -- leave-the-game control there is, so write an autosave before the world
+    -- goes away. Deliberately reads nothing but `self`: this closure is
+    -- persisted into savegames, and a new upvalue would change its shape.
+    if TheApp.ios and not self.map_editor and self.app.world then
+      pcall(self.app.world._executeAutosave, self.app.world)
+    end
     self.app:loadMainMenu()
     -- Release the mouse regardless of setting
     self.app.video:setCaptureMouse(false)

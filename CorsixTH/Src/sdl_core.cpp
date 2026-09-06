@@ -203,7 +203,26 @@ int l_get_key_modifiers(lua_State* L) {
   return 1;
 }
 
-int l_quit(lua_State*) {
+int l_quit([[maybe_unused]] lua_State* L) {
+#ifdef CORSIX_TH_IOS
+  // CorsixTH-iOS @bugfix 2026-09-08 an iOS app must never terminate itself.
+  // SDL_EVENT_QUIT ends mainloop, and main() then either returns -- which iOS
+  // records as a crash -- or leaves the app on screen with a dead render loop,
+  // a frozen last frame the player has to force close from the app switcher.
+  // Apple's guidance is explicit that an app must not offer a control that
+  // quits it. The one legitimate use of this path is App:reset, which restarts
+  // the Lua state inside the same process after a data-directory change; that
+  // sets _RESTART in the registry first, so allow it and refuse everything
+  // else. This is the backstop; the Lua side no longer offers the control.
+  lua_getfield(L, LUA_REGISTRYINDEX, "_RESTART");
+  const bool restarting = lua_toboolean(L, -1) != 0;
+  lua_pop(L, 1);
+  if (!restarting) {
+    std::printf("SDL.quit() ignored: an iOS app does not quit itself.\n");
+    std::fflush(stdout);
+    return 0;
+  }
+#endif
   SDL_Event e;
   e.type = SDL_EVENT_QUIT;
   SDL_PushEvent(&e);
@@ -1718,6 +1737,13 @@ leave_loop:
 int luaopen_sdl(lua_State* L) {
   fps.init();
   luaT_register(L, "sdl", sdllib);
+#ifdef CORSIX_TH_IOS
+  // CorsixTH-iOS @feature 2026-09-08 let Lua ask whether it is running on iOS,
+  // so the UI can leave out controls the platform cannot honour. App:App
+  // copies this to TheApp.ios, which is what the dialogs read.
+  lua_pushboolean(L, 1);
+  lua_setfield(L, -2, "ios");
+#endif
   load_extra(L, "audio", luaopen_sdl_audio);
   load_extra(L, "wm", luaopen_sdl_wm);
 
