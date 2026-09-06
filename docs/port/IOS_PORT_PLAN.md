@@ -768,6 +768,32 @@ State, per item, that you performed it on the iPad:
 
 An iOS app is suspended and resumed constantly, and can be killed without warning.
 
+### Quit does not work on iOS, and must not — fix this first
+
+The user hit this in real play: choosing Quit "doesn't seem to actually close the app". It never
+will, and it should not try. The path is `menu.lua:707,741` → `self.ui:quit()` → `SDL.quit()`
+(`app.lua:2001-2011`) → an `SDL_EVENT_QUIT` pushed at `sdl_core.cpp:159` → `goto leave_loop`
+(`sdl_core.cpp:333`) → `mainloop` returns → the `while (bRun)` loop in
+`CorsixTH/SrcUnshared/main.cpp:173` decides whether to restart Lua → `main()` returns.
+
+On iOS that leaves the app alive with a dead render loop — a frozen last frame the user has to
+force-close from the app switcher — or terminates the process, which iOS records as a crash.
+Apple's guidance is explicit that an app must never provide a control that quits it; the user
+closes apps from the app switcher.
+
+Required behaviour on iOS:
+- **Never let the process exit or the loop die.** Whatever the Quit path does, the app must
+  remain responsive with a live render loop afterwards.
+- **Repurpose it, do not simply delete it.** Removing the item leaves no way to abandon a game
+  in progress. On iOS, Quit should save (or offer to) and return to the **main menu**, which is
+  a genuinely useful action and keeps the app running. Relabel it accordingly rather than
+  leaving a "Quit" that does not quit.
+- Check both call sites — `menu.lua:707` (`self.ui:quit(true)`) and `menu.lua:741`
+  (`self.ui:quit()`) — and establish which is the in-game menu and which the map editor before
+  changing either.
+- Verify no unsaved-progress loss: quitting to the main menu must not silently discard a game
+  the autosave work below would otherwise have preserved.
+
 ### Work
 
 - Register an `SDL_AddEventWatch` (a watcher, not a poll — these can arrive after the loop
