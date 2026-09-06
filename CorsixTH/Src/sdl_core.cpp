@@ -363,6 +363,12 @@ constexpr std::string_view dispatch_touch_rotate("touch_rotate");
 // started. Everything it emits goes through App:dispatch, which is the exact
 // entry point real SDL mouse events use, so the 298 Lua UI files are unchanged.
 //
+// The division is absolute and has no modes in it: one finger interacts, two
+// fingers navigate. One finger never moves the camera, anywhere, so there is
+// never a question of whether a drag was meant to pan or to do the thing under
+// it; and two-finger pan and zoom work in every mode, including in the middle
+// of a placement, so the one finger is always free to be spoken for.
+//
 // Two rules carried over from the GeneralsX port, each of which was a real bug
 // there:
 //   * a finger landing emits NOTHING but a motion. A button-down that is later
@@ -380,7 +386,7 @@ namespace touch {
 enum class phase {
   idle,         // no fingers tracked
   pending,      // one finger down, gesture unidentified, no button emitted
-  drag_pan,     // one finger past the dead zone, panning the camera
+  drag_none,    // one finger past the dead zone with nothing to drag: a no-op
   drag_mouse,   // one finger past the dead zone, held left button (room sizing)
   drag_carry,   // one finger carrying a placement: motion only, no button held
   carry_armed,  // a second finger has landed on a carry, intent not yet known
@@ -390,9 +396,11 @@ enum class phase {
   two_active    // two-finger pan and pinch, both live
 };
 
-//! What Lua says a one-finger drag starting at a given point means.
+//! What Lua says a one-finger drag starting at a given point means. One finger
+//! never moves the camera: that is two fingers, in every mode, always. So a
+//! drag with nothing under it is not a pan, it is nothing at all.
 enum class drag_mode {
-  camera = 0,  // pan the map
+  none = 0,    // nothing here to drag; swallow the gesture
   button = 1,  // held left-button drag: room sizing, sliders, window dragging
   wheel = 2,   // scroll the list under the finger
   carry = 3    // position something on the map; lifting drops it
@@ -446,6 +454,9 @@ struct state {
   //! second finger that lands and lifts without travelling is a rotate; one
   //! that travels is the start of a two-finger camera gesture.
   float f2_down_x{0.0f}, f2_down_y{0.0f};
+  //! Set once the long press has been ruled out for this finger, so the check
+  //! is not repeated on every pass of the main loop while it is held.
+  bool long_press_suppressed{false};
   //! Set while gesture logging is on (CORSIXTH_TOUCH_LOG in the environment).
   int log_gestures{-1};
   //! Render pixels per window point, so thresholds stay physical.
@@ -493,7 +504,7 @@ const char* phase_name(phase p) {
   switch (p) {
     case phase::idle: return "idle";
     case phase::pending: return "pending";
-    case phase::drag_pan: return "drag_pan";
+    case phase::drag_none: return "drag_none";
     case phase::drag_mouse: return "drag_mouse";
     case phase::drag_carry: return "drag_carry";
     case phase::carry_armed: return "carry_armed";
@@ -683,18 +694,6 @@ void begin_two_active() {
   set_phase(phase::two_active, "two fingers moved");
 }
 
-bool pan_to(lua_State* L, float x, float y) {
-  const float dx = x - s.last_x;
-  const float dy = y - s.last_y;
-  s.last_x = x;
-  s.last_y = y;
-  add_sample(dx, dy);
-  if (dx == 0.0f && dy == 0.0f) {
-    return false;
-  }
-  return dispatch(L, dispatch_touch_camera, {dx, dy, 1.0, x, y});
-}
-
 //! Pan and zoom in the same message, so they are applied in the same frame and
 //! neither is locked out by the other. Zoom stays dormant until the fingers
 //! deliberately change separation faster than they are travelling, which is
@@ -766,6 +765,7 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           s.down_x = s.last_x = px;
           s.down_y = s.last_y = py;
           s.down_ticks = SDL_GetTicks();
+          s.long_press_suppressed = false;
           set_phase(phase::pending, "first finger down");
           reset_samples();
           // A finger landing catches a coasting map, as it does in any iOS
@@ -799,9 +799,11 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           s.f2_down_y = py;
           set_phase(phase::carry_armed, "second finger on carry");
           break;
-        case phase::drag_pan:
-          // Already panning: adopt the second finger without making the user
-          // re-cross a dead zone, so the pan never stalls mid-gesture.
+        case phase::drag_none:
+          // The finger was already dragging deliberately, with nothing under
+          // it. A second finger landing can only mean "move the view", so
+          // start immediately rather than making the user re-cross a dead zone
+          // and throwing away the opening travel of the pan.
           s.f2 = id;
           s.f2x = px;
           s.f2y = py;
@@ -873,20 +875,16 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
             set_phase(phase::drag_carry, "drag while placing");
             repaint = emit_motion(L, px, py) || repaint;
           } else {
-            // Pan from the original touch point, not from here, so the ground
-            // under the finger stays under the finger from the first pixel.
-            set_phase(phase::drag_pan, "drag on the map");
-            reset_samples();
-            s.last_x = s.down_x;
-            s.last_y = s.down_y;
-            repaint = pan_to(L, px, py) || repaint;
+            // Nothing here to drag. CorsixTH has no drag-box selection, so this
+            // is deliberately inert: it emits nothing now and nothing on
+            // release, rather than leaving a stray click or a selection behind.
+            s.last_x = px;
+            s.last_y = py;
+            set_phase(phase::drag_none, "drag with nothing under it");
           }
           break;
         }
-        case phase::drag_pan:
-          if (id == s.f1) {
-            repaint = pan_to(L, px, py) || repaint;
-          }
+        case phase::drag_none:
           break;
         case phase::drag_mouse:
           if (id == s.f1) {
@@ -993,9 +991,10 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
             repaint = emit_click(L, 1, s.down_x, s.down_y) || repaint;
           }
           break;
-        case phase::drag_pan:
         case phase::two_active:
           repaint = release_fling(L) || repaint;
+          break;
+        case phase::drag_none:
           break;
         case phase::drag_mouse:
           repaint = emit_button(L, false, 1, s.last_x, s.last_y) || repaint;
@@ -1032,6 +1031,19 @@ bool poll_long_press(lua_State* L) {
     return false;
   }
   if (SDL_GetTicks() - s.down_ticks < long_press_ms) {
+    return false;
+  }
+  if (s.long_press_suppressed) {
+    return false;
+  }
+  if (query_drag_mode(L, s.down_x, s.down_y) ==
+      static_cast<int>(drag_mode::carry)) {
+    // Right click undoes a placement, and holding still is exactly what someone
+    // lining an object up does. Take the long press out of every placement
+    // mode rather than have it throw the placement away mid-aim. The phase is
+    // deliberately left alone, so this finger can still tap or start a carry.
+    s.long_press_suppressed = true;
+    log_event("long press suppressed while placing");
     return false;
   }
   // No left button was ever sent, so this is a pure right click.

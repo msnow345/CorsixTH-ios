@@ -1109,8 +1109,9 @@ function UI:_windowAt(x, y)
 end
 
 -- What a one-finger drag can mean. The recogniser in sdl_core.cpp owns gesture
--- identity; only the game knows what a gesture means where it started.
-UI.TOUCH_DRAG_CAMERA = 0
+-- identity; only the game knows what a gesture means where it started. Moving
+-- the camera is not on the list: that is two fingers, in every mode, always.
+UI.TOUCH_DRAG_NONE = 0
 UI.TOUCH_DRAG_BUTTON = 1
 UI.TOUCH_DRAG_WHEEL = 2
 UI.TOUCH_DRAG_CARRY = 3
@@ -1124,7 +1125,7 @@ UI.TOUCH_DRAG_CARRY = 3
 function UI:onTouchDragQuery(x, y)
   local window, wx, wy = self:_windowAt(x, y)
   if not window then
-    return UI.TOUCH_DRAG_CAMERA
+    return UI.TOUCH_DRAG_NONE
   end
   if wantsWheelScroll(window) then
     -- Unless the finger is on the scrollbar itself, in which case dragging the
