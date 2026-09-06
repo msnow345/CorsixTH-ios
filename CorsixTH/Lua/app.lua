@@ -73,6 +73,15 @@ function App:App()
     pinch_begin = self.onPinchBegin,
     pinch_update = self.onPinchUpdate,
     pinch_end = self.onPinchEnd,
+    -- CorsixTH-iOS @feature 2026-09-07 events produced by the iOS touch
+    -- recogniser. Taps, long presses and held drags arrive as ordinary mouse
+    -- events; only the camera gestures, which have no mouse equivalent that
+    -- tracks a finger 1:1, need handlers of their own.
+    touch_camera = self.onTouchCamera,
+    touch_fling = self.onTouchFling,
+    touch_catch = self.onTouchCatch,
+    touch_drag_query = self.onTouchDragQuery,
+    touch_rotate = self.onTouchRotate,
   }
   self.strings = {}
   self.savegame_version = SAVEGAME_VERSION
@@ -1462,6 +1471,26 @@ end
 
 function App:onPinchEnd(...)
   return self.ui:onPinchEnd(...)
+end
+
+function App:onTouchCamera(...)
+  return self.ui:onTouchCamera(...)
+end
+
+function App:onTouchFling(...)
+  return self.ui:onTouchFling(...)
+end
+
+function App:onTouchCatch(...)
+  return self.ui:onTouchCatch(...)
+end
+
+function App:onTouchDragQuery(...)
+  return self.ui:onTouchDragQuery(...)
+end
+
+function App:onTouchRotate(...)
+  return self.ui:onTouchRotate(...)
 end
 
 function App:isThemeHospitalPath(path)

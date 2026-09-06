@@ -27,6 +27,12 @@ class "UI" (Window)
 local UI = _G["UI"]
 
 local TH = require("TH")
+
+-- CorsixTH-iOS @feature 2026-09-07 true on a build whose only pointer is a
+-- finger. Deliberately a file-local rather than a field on the UI object: the
+-- UI is persisted into savegames, and where the game is being played is not a
+-- property of the save.
+local touch_input = TH.GetCompileOptions().os == "ios"
 local SDL = require("sdl")
 local WM = SDL.wm
 local lfs = require("lfs")
@@ -314,7 +320,10 @@ function UI:draw(canvas)
   end
   Window.draw(self, canvas, 0, 0)
   self:drawTooltip(canvas)
-  if self.simulated_cursor then
+  -- CorsixTH-iOS @feature 2026-09-07 the cursor sprite is a picture of a mouse
+  -- pointer. With touch there is no pointer to picture: it sits wherever the
+  -- last tap landed and reads as a stuck cursor.
+  if self.simulated_cursor and not touch_input then
     self.simulated_cursor.draw(canvas, self.cursor_x, self.cursor_y)
   end
 end
@@ -1060,6 +1069,94 @@ end
 --!
 --!return (boolean) event processed indicator
 function UI:onPinchUpdate()
+  return false
+end
+
+--! Does any window in this subtree respond to the mouse wheel?
+local function wantsWheelScroll(window)
+  if window.scrollbars and #window.scrollbars > 0 then
+    return true
+  end
+  if window.onMouseWheel and window.onMouseWheel ~= Window.onMouseWheel then
+    return true
+  end
+  if window.windows then
+    for _, child in ipairs(window.windows) do
+      if wantsWheelScroll(child) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+--! Find the topmost dialog under a screen point.
+--!param x,y (number) Screen position.
+--!return (Window, number, number) The window and the point in its own space,
+-- or nil when the point is not over any dialog.
+function UI:_windowAt(x, y)
+  if not self.windows then
+    return nil
+  end
+  for _, window in ipairs(self.windows) do
+    local s = window.apply_ui_scale and TheApp.gfx:getUIScale() or 1
+    local wx, wy = x - window.x * s, y - window.y * s
+    if window.visible ~= false and window:hitTest(wx, wy) then
+      return window, wx, wy
+    end
+  end
+  return nil
+end
+
+-- What a one-finger drag can mean. The recogniser in sdl_core.cpp owns gesture
+-- identity; only the game knows what a gesture means where it started.
+UI.TOUCH_DRAG_CAMERA = 0
+UI.TOUCH_DRAG_BUTTON = 1
+UI.TOUCH_DRAG_WHEEL = 2
+UI.TOUCH_DRAG_CARRY = 3
+
+--! Decide what a one-finger drag beginning at this point means.
+--! Called by the iOS touch layer the instant a press passes the drag dead zone
+--! and before any button has been committed, so the answer can still change
+--! what the gesture becomes.
+--!param x,y (number) Where the finger first landed, in screen coordinates.
+--!return (integer) One of the UI.TOUCH_DRAG_* values.
+function UI:onTouchDragQuery(x, y)
+  local window, wx, wy = self:_windowAt(x, y)
+  if not window then
+    return UI.TOUCH_DRAG_CAMERA
+  end
+  if wantsWheelScroll(window) then
+    -- Unless the finger is on the scrollbar itself, in which case dragging the
+    -- thumb is exactly what was asked for.
+    for _, bar in ipairs(window.scrollbars or {}) do
+      if bar.enabled and window:hitTestPanel(wx, wy, bar.slider) then
+        return UI.TOUCH_DRAG_BUTTON
+      end
+    end
+    return UI.TOUCH_DRAG_WHEEL
+  end
+  return UI.TOUCH_DRAG_BUTTON
+end
+
+--! A second finger tapped while one finger was placing something. Nothing to
+--! rotate outside a game.
+function UI:onTouchRotate()
+  return false
+end
+
+--! Direct-manipulation camera gesture. Only the in-game UI has a camera.
+function UI:onTouchCamera()
+  return false
+end
+
+--! A camera gesture ended with the fingers still moving.
+function UI:onTouchFling()
+  return false
+end
+
+--! A finger landed; catch anything the camera was still doing.
+function UI:onTouchCatch()
   return false
 end
 
