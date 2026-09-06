@@ -588,10 +588,33 @@ touch-as-mouse emulation, which synthesises mouse events from touches (marked
   (button highlights, tooltips) updates as a side effect. Your synthetic sequence must deliver
   a motion event *before* the button-down for the same reason the GeneralsX port had to — or
   buttons stop highlighting and some UI stops responding.
-- **The cursor is now a visible artefact.** The game draws its own cursor sprite, which with
-  touch sits wherever the last tap landed and reads as a stuck mouse pointer. Decide what it
-  should do on touch (hide it, or keep it only while a finger is down) and note that
-  `cursor_scale` already exists in config. Judge it on device.
+### The user's own priorities, from playing the current build
+
+Ranked by what they actually complained about. These are the acceptance bar for "feels native";
+everything else in this task supports them.
+
+1. **Hide the cursor.** Verbatim: "it was just annoying seeing the cursor". The game draws its
+   own cursor sprite, which with touch sits wherever the last tap landed and reads as a stuck
+   mouse pointer. Default it off on touch. Keeping it visible only while a finger is down is an
+   acceptable alternative if it tests better, but a permanently parked cursor is not. Note
+   `cursor_scale` already exists in config; this is about visibility, not size.
+2. **Drag to pan.** Verbatim: "having to move the mouse to the edges to pan was annoying". This
+   is the single biggest feel problem. One-finger drag and two-finger drag must both pan the map
+   directly, 1:1, as specified below.
+3. **Keep tap-to-click exactly as good as it is now.** Verbatim: "tapping to click on things
+   worked". Do not regress it.
+
+**The edge-scroll conflict — resolve this deliberately.** CorsixTH scrolls the map when the
+pointer nears a screen edge (`tick_scroll_amount_mouse`, `game_ui.lua:643`), and that is
+currently the *only* way to pan, which is exactly what the user is complaining about. Once
+direct drag-panning exists, edge-scroll becomes an active hazard: a drag that ends near an edge
+would pan directly *and* edge-scroll, compounding into a lurch. But edge-scroll is still wanted
+in one situation — while carrying or sizing something with one finger, where two-finger panning
+is unavailable and the map must follow the finger toward the edge.
+
+So: **disable edge-scroll for normal touch navigation, and keep it only while a placement or
+room-sizing mode is active.** Verify both halves on device: a normal drag to the screen edge
+must not lurch, and carrying a room/object toward the edge must still scroll.
 
 ### Architecture
 
