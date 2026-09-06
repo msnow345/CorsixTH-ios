@@ -357,9 +357,10 @@ the GeneralsX shell-app pattern (`../GeneralsX/ios/project.yml`,
   in the engine binary if using the shell pattern, sign inside-out, and support
   `--install` (install to a device via devicectl) and `--device <udid>`.
   Fail loudly on a missing required input; never silently ship an incomplete bundle.
-- `config.path.txt` at the bundle root containing the writable config directory
-  (see Task 5 — coordinate the exact value with that task; if Task 5 has not run yet, define
-  the value here and Task 5 conforms to it).
+- **Do not** ship a `config.path.txt` with a hard-coded container path. The iOS data container
+  path contains a per-install UUID (`/var/mobile/Containers/Data/Application/<UUID>/`) that
+  changes on every reinstall, so a static file baked into the read-only bundle would go stale
+  immediately. Task 5 owns the correct mechanism; stage nothing for it here.
 - Extend `docs/port/IOS_BUILD.md` with the full build → package → install sequence.
 
 ### Acceptance
@@ -384,14 +385,40 @@ and pointing the game at it (`iso_fs.cpp` reads ISO9660 directly).
 ### Work
 
 - Writable-state layout per constraint 9: `Documents/CorsixTH/` holds `config.txt`,
-  `hotkeys.txt`, `Saves/`, `Levels/`, `Campaigns/`, `Logs/`, `Screenshots/`. Achieve this via
-  the bundle-root `config.path.txt` mechanism (`CorsixTH/Lua/config_finder.lua:76-85`) — no C++
-  or Lua change should be needed. Verify the directory-creation path in
-  `App:initUserDirectories` / `App:initSavegameDir` (`CorsixTH/Lua/app.lua:469-520`) actually
-  succeeds inside the container on first launch, and that the app creates
-  `Documents/CorsixTH/` itself if absent (a first-run app has an empty Documents; if Lua's
-  `lfs.mkdir` cannot create a nested path, handle it — one level at a time or from C++ before
-  Lua boots).
+  `hotkeys.txt`, `Saves/`, `Levels/`, `Campaigns/`, `Logs/`, `Screenshots/`.
+
+  **How the engine already handles this — understand it before changing anything.** There is
+  no save-path rewriting to do; the indirection exists:
+  - `CorsixTH/CorsixTH.lua:102` injects `--config-file=<config_finder.config_filename>` into
+    the command line at startup, so `App:getConfigPath()` (`app.lua:456`) returns an
+    **absolute** path, not the bare `"config.txt"` its fallback suggests.
+  - `getDefaultSavegameDir`, `getDefaultScreenshotsDir` and `initUserDirectories`
+    (`app.lua:459-500`) all derive from that absolute path by stripping the filename. So
+    everything writable follows the config file's directory automatically.
+  - `config_finder.find_config()` (`config_finder.lua:60-111`) picks that directory, and its
+    `check_dir_exists` helper **recursively creates** it (`check_dir_exists(subpath) and
+    lfs.mkdir(path)`), so nested creation on a first-run empty Documents is already handled.
+
+  **The iOS problem and the fix.** The default on non-Windows is
+  `XDG_CONFIG_HOME or $HOME/.config` + `/CorsixTH`. On iOS `$HOME` is the app's data container
+  root, so that path *is* writable and saving would work — but `.config` is a hidden directory
+  outside `Documents/`, therefore invisible over Files sharing, which defeats constraint 9 and
+  leaves users unable to reach their own saves.
+
+  The bundle-root `config.path.txt` mechanism (`config_finder.lua:76-89`) cannot solve this:
+  the container path contains a per-install UUID that changes on every reinstall, and the
+  bundle is read-only so nothing can rewrite the file at runtime.
+
+  So make the smallest possible change: an iOS-guarded branch in `find_config()` that uses
+  `$HOME/Documents/CorsixTH` — resolved from the environment at runtime, so it is
+  UUID-independent. Keep desktop behaviour byte-identical. **Verify empirically** what `$HOME`
+  actually is inside the running app (log it) rather than assuming; report the real value.
+
+- **Watch the silent fallback.** If `check_dir_exists` fails, `find_config` falls back to
+  `ourpath` — the read-only bundle root (`config_finder.lua:108-110`). That would leave the
+  game apparently running but unable to save anything, with no error. Confirm the fallback is
+  not being taken on device (log the chosen config path at startup), and consider whether an
+  iOS build should fail loudly instead of falling back to an unwritable location.
 - Make the game's own data-file browser usable on iOS: it must start somewhere sensible
   (the app's Documents directory, not `/`) so a touch user can reach a dropped folder or ISO in
   a few taps. Check `CorsixTH/Lua/dialogs/resizables/directory_browser.lua` and the
