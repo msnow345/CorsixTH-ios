@@ -717,6 +717,27 @@ Requirements carried over from the GeneralsX port, each of which was a real bug 
   placement problem, then design for CorsixTH's own placement flow rather than copying it.
   Edge-scroll while carrying an object (drag toward the screen edge and the map scrolls, the
   carried thing staying under the finger) is a strong addition if the placement flow allows it.
+- **The menu bar is currently unreachable by touch — this is a cannot-play defect, fix it.**
+  Save, load, quit and every option live in `UIMenuBar` (`CorsixTH/Lua/dialogs/menu.lua`), which
+  is revealed two ways, both unavailable on a tablet:
+  1. Hovering the pointer at the top of the screen — `UIMenuBar:onMouseMove` sets
+     `visible = y < self.height * s + padding * s` (`menu.lua:251-254`). Touch has no hover: the
+     emulated pointer only moves while a finger is down, so the bar vanishes as soon as you lift
+     to tap a menu item.
+  2. The `ingame_showmenubar` hotkey, which defaults to **escape** (`config_finder.lua:206`) —
+     and an iPad has no escape key. This is the same class of problem the GeneralsX port hit
+     with movies that were skippable only with ESC.
+
+  The user has hit this in real play: they can start and play a game but cannot save or quit.
+  Give the menu bar a proper touch affordance — a swipe down from the top edge, or a tap in the
+  top strip that makes the bar appear and *stay* until dismissed, or a persistent always-visible
+  affordance. Whatever you choose, the bar must remain visible long enough to tap through to a
+  submenu item without a finger held at the top edge. Verify by saving and quitting a game
+  entirely by touch.
+
+  Check `menu_disappear_counter` / `disappear_counter` (`menu.lua:62-100`) — the auto-hide
+  timing is tuned for a mouse and will need adjusting for touch.
+
 - **Text entry** (hospital name, save names) → bring up the on-screen keyboard via
   `SDL_StartTextInput` when a text field takes focus, and hide it on blur. The Lua UI already
   has text-entry widgets and the engine already dispatches `SDL_EVENT_TEXT_INPUT`
