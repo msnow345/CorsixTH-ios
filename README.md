@@ -64,6 +64,55 @@ There are some areas of the game still missing, and while we work to get them in
 - The original graphics do not have a complete set for Pregnancy, Alien DNA, and female Fractured Bones patients -- these may cause anomalies if you enable regular spawning in settings
 - Some objects in the game may glitch with walls
 
+## iOS and iPadOS ##
+
+There is an unofficial iOS/iPadOS port in this tree. It is not on the App Store -- you build it
+yourself and install it with your own Apple developer account. `docs/port/IOS_BUILD.md` has the
+build, signing and install commands, `docs/port/IOS_PORT_NOTES.md` records what was changed and
+what is still missing, and `docs/port/IOS_AUDIO.md` covers sound. You supply your own copy of the
+original game data as usual: launch the app once, then put your `HOSP` folder into
+`On My iPad -> CorsixTH -> CorsixTH` in the Files app, where your saves, config and logs live too.
+
+### Touch controls ###
+
+Everything the game does with a mouse is reachable with a finger, but several of the gestures are
+not guessable, so they are all listed here. In short: **one finger interacts, two fingers
+navigate** -- and two fingers pan and zoom in every mode, including while you are carrying or
+sizing something.
+
+| Gesture | What it does |
+| --- | --- |
+| Tap | Left click. The click lands where your finger went *down*, not where it lifted, so small buttons do not slip. |
+| Tap the very top edge of the screen | Reveals the menu bar (File, Options, ...), and it stays up until you choose something. This is the only way to it: there is no Escape key. |
+| Tap the right-hand end of the bottom panel | The first tap reveals the buttons that normally appear on hover in place of the information bar; the second tap presses one. Controls that are permanently on screen -- the bank, the middle toolbar -- still act on the first tap. |
+| Long press, about 0.4 s | Right click, aimed at whatever was under your finger even if it has walked off since. Right click is how you pick an object up, and how you put a carried person back down. |
+| Long press an object, then keep the finger down and move | The press picks the object up and the same finger carries it straight on, from where your finger is. Release to place it. |
+| Double tap a member of staff | Picks them up. Then lift; drag one finger and release to put them down. They stay in hand in between, so you can two-finger pan somewhere else first. |
+| Second-finger tap while carrying an object | Rotates it one step, standing in for the rotate hotkey. Staff have no orientation, so it does nothing for them. |
+| Long press while carrying a person | Puts them back down. It is the only way -- that dialog has no cancel button. |
+| Drag one finger on the map | Pans the view 1:1. A flick coasts to a stop; touch the screen again to catch it. |
+| Drag one finger while building or placing | Sizes the room, or carries whatever is in hand. The map deliberately never moves under your finger while something is being placed -- use two fingers for that. Drag to the edge of the screen and the map scrolls, so you can place things beyond the current view. |
+| Drag one finger inside a list | Scrolls the list. On the scrollbar itself, it drags the scrollbar. |
+| Drag one finger on a dialog | Acts as a held mouse button: sliders, reordering a queue, dragging a window about. |
+| Drag two fingers | Pans by the point between them. Available in every mode, including mid-placement. |
+| Pinch two fingers | Zooms, anchored between your fingers. Pinch and pan apply together, so you can start pinching in the middle of a drag without lifting. |
+
+If you would rather one finger never moved the view, set `touch_one_finger_pan = false` near the
+top of `CorsixTH/Lua/game_ui.lua` and rebuild. A one-finger drag on open map then does nothing at
+all, leaving two fingers as the only way to move the camera; nothing else changes.
+
+A few things have no touch route, because they were only ever bound to keys and an iPad has no
+keyboard:
+
+- **Selling an item you have already picked up** (`ingame_sellPickedUpItem`) has no button in the
+  placement dialog. Cancel the placement instead.
+- **Camera bookmarks** (store and recall position) have no pointer route on any platform.
+- **Pausing an in-game video** (`global_pause_movie`) is keyboard-only; a tap stops the video
+  outright instead. Moot in practice, as videos are disabled in the iOS build.
+
+The mouse cursor sprite is not drawn either, since there is no pointer to draw -- so hints carried
+by the cursor's shape, such as the bank manager's pie chart, do not show up.
+
 ## Developers
 ### Coders and non-coders we want you!
 
