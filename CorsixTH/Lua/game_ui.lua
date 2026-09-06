@@ -1069,6 +1069,37 @@ function GameUI:onTouchRotate()
   return false
 end
 
+--! Where should a long press deliver its right click?
+--!
+--! CorsixTH-iOS @bugfix 2026-09-07: at the point the finger pressed, patients
+--! and staff have walked away by the time the hold completes, so the click
+--! lands on bare floor. That is why picking someone up by long press kept
+--! failing, and why neither a shorter hold nor a double tap would fix it: both
+--! still aim at a coordinate the target has left.
+--!
+--! Aim at the entity instead. `cursor_entity` is the one the motion emitted at
+--! finger-down resolved -- the same lookup the game already uses for highlights
+--! and tooltips -- and no motion is emitted again while the press is merely
+--! being held, so it is still the thing that was pressed. Its drawn position is
+--! its tile plus the sub-tile offset it has walked into, which is what makes
+--! this track a walking target rather than snap between tiles.
+--!return (number, number) Screen position to click, or nil to use the press
+-- point.
+function GameUI:onTouchLongPressAnchor()
+  local entity = self.cursor_entity
+  if not entity or not entity.tile_x or not entity.th then
+    return nil
+  end
+  local x, y = self:WorldToScreen(entity.tile_x, entity.tile_y)
+  local ok, offset_x, offset_y = pcall(entity.th.getPosition, entity.th)
+  if ok and offset_x and offset_y then
+    local zoom = self:getEffectiveZoom()
+    x = x + offset_x * zoom
+    y = y + offset_y * zoom
+  end
+  return x, y
+end
+
 --! Check whether the configured mouse drag button is being held down (true) or not (false).
 -- fixme: right mouse scrolling currently breaks other mouse operations (see issue 2469).
 function GameUI:_isMouseScrollButtonDown()

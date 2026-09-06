@@ -82,6 +82,7 @@ function App:App()
     touch_catch = self.onTouchCatch,
     touch_drag_query = self.onTouchDragQuery,
     touch_rotate = self.onTouchRotate,
+    touch_longpress_anchor = self.onTouchLongPressAnchor,
   }
   self.strings = {}
   self.savegame_version = SAVEGAME_VERSION
@@ -1491,6 +1492,10 @@ end
 
 function App:onTouchRotate(...)
   return self.ui:onTouchRotate(...)
+end
+
+function App:onTouchLongPressAnchor(...)
+  return self.ui:onTouchLongPressAnchor(...)
 end
 
 function App:isThemeHospitalPath(path)

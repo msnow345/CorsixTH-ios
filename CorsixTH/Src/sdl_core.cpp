@@ -353,6 +353,8 @@ constexpr std::string_view dispatch_touch_fling("touch_fling");
 constexpr std::string_view dispatch_touch_catch("touch_catch");
 constexpr std::string_view dispatch_touch_drag_query("touch_drag_query");
 constexpr std::string_view dispatch_touch_rotate("touch_rotate");
+constexpr std::string_view dispatch_touch_longpress_anchor(
+    "touch_longpress_anchor");
 
 // CorsixTH-iOS @feature 2026-09-07 translate raw touches into game input.
 //
@@ -410,7 +412,11 @@ enum class drag_mode {
   camera = 4   // pan the map 1:1, with a flick at the end
 };
 
-constexpr Uint64 long_press_ms = 600;
+//! 600 ms is an RTS figure, chosen where the thing under the finger is not
+//! going anywhere. In CorsixTH the long press is how a member of staff is
+//! picked up, and they walk, so the hold is the whole cost of catching one.
+//! This is close to UILongPressGestureRecognizer's own 500 ms default.
+constexpr Uint64 long_press_ms = 400;
 //! Movement, in window points, before a press becomes a drag.
 constexpr float dead_zone_pt = 8.0f;
 //! Change in finger separation, in window points, before zoom engages at all.
@@ -654,6 +660,31 @@ bool emit_wheel(lua_State* L, float x, float y, double wheel_y) {
   }
   lua_pop(L, 2);
   return repaint;
+}
+
+//! Ask Lua where a long press that began under an entity should land.
+//! The click cannot go to the point the finger pressed: patients and staff walk,
+//! and by the time the timer fires that point is bare floor -- which is exactly
+//! why a shorter hold, or a double tap, would not fix this on its own. Lua
+//! answers with where the thing that was under the finger is *now*.
+//!return (bool) Whether an anchor was supplied; x and y are left alone if not.
+bool query_long_press_anchor(lua_State* L, float* x, float* y) {
+  push_app_dispatch(L, dispatch_touch_longpress_anchor);
+  const int nargs = 1;
+  if (lua_pcall(L, nargs + 1, 2, -3 - nargs) != LUA_OK) {
+    std::fprintf(stderr, "Error in touch_longpress_anchor: %s\n",
+                 lua_tostring(L, -1));
+    lua_pop(L, 2);
+    return false;
+  }
+  bool anchored = false;
+  if (lua_isnumber(L, -2) && lua_isnumber(L, -1)) {
+    *x = static_cast<float>(lua_tonumber(L, -2));
+    *y = static_cast<float>(lua_tonumber(L, -1));
+    anchored = true;
+  }
+  lua_pop(L, 3);
+  return anchored;
 }
 
 //! Ask Lua what a one-finger drag starting here should do. The recogniser owns
@@ -1081,9 +1112,15 @@ bool poll_long_press(lua_State* L) {
     log_event("long press suppressed while placing");
     return false;
   }
+  // Follow whatever was under the finger, if it has walked off since.
+  float ax = s.down_x;
+  float ay = s.down_y;
+  const bool anchored = query_long_press_anchor(L, &ax, &ay);
   // No left button was ever sent, so this is a pure right click.
-  const bool repaint = emit_click(L, 3, s.down_x, s.down_y);
-  set_phase(phase::longpress, "held 600 ms");
+  const bool repaint = emit_click(L, 3, ax, ay);
+  set_phase(phase::longpress,
+            anchored ? "held: right click on the entity it started on"
+                     : "held: right click where it started");
   return repaint;
 }
 

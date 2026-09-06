@@ -1146,6 +1146,12 @@ function UI:onTouchRotate()
   return false
 end
 
+--! Where a long press should deliver its click. Nothing outside a game walks
+--! away from where it was pressed, so the press point stands.
+function UI:onTouchLongPressAnchor()
+  return nil
+end
+
 --! Direct-manipulation camera gesture. Only the in-game UI has a camera.
 function UI:onTouchCamera()
   return false
