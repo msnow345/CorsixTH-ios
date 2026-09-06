@@ -77,8 +77,9 @@ original game data as usual: launch the app once, then put your `HOSP` folder in
 
 Everything the game does with a mouse is reachable with a finger, but several of the gestures are
 not guessable, so they are all listed here. In short: **one finger interacts, two fingers
-navigate** -- and two fingers pan and zoom in every mode, including while you are carrying or
-sizing something.
+navigate** -- and two fingers pan and zoom almost everywhere, including while you are carrying
+something. Sizing a room is the exception: a second finger there finishes the sizing drag before
+the pan starts.
 
 | Gesture | What it does |
 | --- | --- |
@@ -94,7 +95,7 @@ sizing something.
 | Drag one finger while building or placing | Sizes the room, or carries whatever is in hand. The map deliberately never moves under your finger while something is being placed -- use two fingers for that. Drag to the edge of the screen and the map scrolls, so you can place things beyond the current view. |
 | Drag one finger inside a list | Scrolls the list. On the scrollbar itself, it drags the scrollbar. |
 | Drag one finger on a dialog | Acts as a held mouse button: sliders, reordering a queue, dragging a window about. |
-| Drag two fingers | Pans by the point between them. Available in every mode, including mid-placement. |
+| Drag two fingers | Pans by the point between them. Available while something is in hand, so you can carry an object across the map. The one thing it interrupts is sizing a room: landing a second finger mid-drag releases the wall rectangle at the size it had reached, then pans. |
 | Pinch two fingers | Zooms, anchored between your fingers. Pinch and pan apply together, so you can start pinching in the middle of a drag without lifting. |
 
 If you would rather one finger never moved the view, set `touch_one_finger_pan = false` near the

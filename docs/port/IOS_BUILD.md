@@ -1,8 +1,9 @@
 # Building CorsixTH for iOS / iPadOS
 
-This document covers **Task 1** of the iOS port: obtaining every native dependency for
-`arm64` iOS (device and simulator) and configuring the CorsixTH tree against them.
-Compiling, linking, bundling and signing the app itself is covered by later tasks.
+This document covers the dependency and configure step of the iOS port: obtaining every native
+dependency for `arm64` iOS (device and simulator) and configuring the CorsixTH tree against them.
+Compiling, linking, bundling and signing the app itself is covered further down, under
+[Packaging, signing and installing](#packaging-signing-and-installing).
 
 ## Prerequisites
 
@@ -133,7 +134,7 @@ for `.a` files and `vtool` for the linked executable.
 
 ---
 
-# Packaging, signing and installing (Task 4)
+# Packaging, signing and installing
 
 `scripts/build/ios/package-ios.sh` is the whole pipeline. It builds the CMake iOS app
 target, stages the bundle with the tree's own `install()` rules, generates and stages the app
@@ -189,7 +190,7 @@ Two traps worth stating plainly:
 ## Usage
 
 ```sh
-scripts/build/ios/fetch-deps.sh device        # once, per Task 1
+scripts/build/ios/fetch-deps.sh device        # once, to fetch the native dependencies
 
 # full build + package + install + launch, from nothing
 scripts/build/ios/package-ios.sh --clean --install --launch

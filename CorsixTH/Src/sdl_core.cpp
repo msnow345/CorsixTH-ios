@@ -482,10 +482,10 @@ bool is_button_drag(int mode) {
          mode == static_cast<int>(drag_mode::preview);
 }
 
-//! 600 ms is an RTS figure, chosen where the thing under the finger is not
-//! going anywhere. In CorsixTH the long press is how a member of staff is
-//! picked up, and they walk, so the hold is the whole cost of catching one.
-//! This is close to UILongPressGestureRecognizer's own 500 ms default.
+//! 400 ms, a little under UILongPressGestureRecognizer's own 500 ms default.
+//! The longer figures common in RTS games suit a target that is not going
+//! anywhere. In CorsixTH the long press is how a member of staff is picked up,
+//! and they walk, so the hold is the whole cost of catching one.
 constexpr Uint64 long_press_ms = 400;
 //! Movement, in window points, before a press becomes a drag.
 constexpr float dead_zone_pt = 8.0f;
