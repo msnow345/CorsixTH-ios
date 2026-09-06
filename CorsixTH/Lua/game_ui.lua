@@ -223,7 +223,15 @@ function GameUI:calculateMinimumZoom()
   return factor
 end
 
-function GameUI:setZoom(factor, follow_cursor)
+--! Set the zoom level, keeping one screen point fixed under the new zoom.
+--!param factor (number) The new zoom factor.
+--!param follow_cursor (boolean) Anchor on the cursor rather than the screen
+-- centre. Ignored when an explicit anchor is given.
+--!param anchor_x (number, optional) Screen x to hold fixed.
+--!param anchor_y (number, optional) Screen y to hold fixed. Both must be given
+-- for the anchor to be used; a pinch passes the point between the fingers here.
+--!return (boolean) Whether the zoom was applied.
+function GameUI:setZoom(factor, follow_cursor, anchor_x, anchor_y)
   if factor <= 0 then
     return false
   end
@@ -240,7 +248,14 @@ function GameUI:setZoom(factor, follow_cursor)
   end
 
   self.visible_diamond = new_diamond
-  local refx, refy = follow_cursor and self.cursor_x or scr_w / 2, follow_cursor and self.cursor_y or scr_h / 2
+  local refx, refy
+  if anchor_x and anchor_y then
+    refx, refy = anchor_x, anchor_y
+  elseif follow_cursor then
+    refx, refy = self.cursor_x, self.cursor_y
+  else
+    refx, refy = scr_w / 2, scr_h / 2
+  end
   local cx, cy = self:ScreenToWorld(refx, refy)
   self.zoom_factor = factor
 
