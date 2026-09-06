@@ -84,6 +84,23 @@ Device pause/resume around backgrounding and interruptions acts on the mixer's a
 never on track pause state, so music resumes where it stopped and anything the player paused
 stays paused.
 
+**Re-verified on the finished tree**, after all the input, scaling and lifecycle work that
+touches the event loop, in a 100-second console session on the device with the level meter on:
+
+```
+MIDI soundfont: ./GeneralUser-GS.sf2
+iOS audio session category: AVAudioSessionCategoryPlayback
+audio device format: 48000 Hz, 2 channels
+Music loaded: decoder=FLUIDSYNTH duration=148.1s soundfont=./GeneralUser-GS.sf2
+Music loaded: decoder=FLUIDSYNTH duration=225.5s soundfont=./GeneralUser-GS.sf2
+audio level: peak=0.4384 rms=0.05685 (SOUND)
+... 96 consecutive one-second reports, every one of them SOUND ...
+```
+
+96 non-silent seconds, the right decoder, the right SoundFont, the playback category still in
+effect, no `No preset found` warning and no Lua error anywhere in the run. That is the music
+path only — nobody was playing, so no effect or speech was mixed — and nobody heard it.
+
 ### 1.4 Display, scaling and frame rate
 
 The existing UI-scale path is used unchanged — no new scaling mechanism. On the reference iPad
