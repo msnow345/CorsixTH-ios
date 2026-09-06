@@ -1116,6 +1116,8 @@ UI.TOUCH_DRAG_BUTTON = 1
 UI.TOUCH_DRAG_WHEEL = 2
 UI.TOUCH_DRAG_CARRY = 3
 UI.TOUCH_DRAG_CAMERA = 4
+-- A carry whose only way out is a right click, so the long press must survive.
+UI.TOUCH_DRAG_CARRY_CANCELLABLE = 5
 
 --! CorsixTH-iOS @feature 2026-09-07 decide what a one-finger drag here means.
 --! Called by the iOS touch layer the instant a press passes the drag dead zone
@@ -1167,6 +1169,68 @@ end
 
 --! CorsixTH-iOS @feature 2026-09-07 a finger landed; catch a coasting camera.
 function UI:onTouchCatch()
+  return false
+end
+
+--! CorsixTH-iOS @bugfix 2026-09-07 the finger has lifted; release the hover.
+--!
+--! A tap sends a motion before its button-down, because CorsixTH's UI is
+--! hover-driven and a real mouse always moves before it clicks. But a finger
+--! never sends the motion that moves *away*, so that hover stayed applied and
+--! every button tapped was left looking hovered.
+--!
+--! Cleared by driving each dialog's own onMouseMove with a point away from it,
+--! which is the mechanism the game already uses to un-hover things, rather than
+--! by reaching into per-dialog hover fields that are all named differently. The
+--! screen centre is used because the edges are not inert: the top edge reveals
+--! the menu bar and the outer band arms edge scrolling.
+--!
+--! GameUI:onMouseMove is deliberately NOT called -- only the dialogs are -- so
+--! this cannot re-resolve the world entity under the cursor, play a hover
+--! sound, or arm anything on the map from a position no finger is at.
+--!return (boolean) Whether anything needs redrawing.
+function UI:onTouchHoverEnd()
+  if not self.windows then
+    return false
+  end
+  local scr_w, scr_h = self.app.video:getRenderSize()
+  local x, y = scr_w / 2, scr_h / 2
+  -- Windows that use hover to *reveal* something check this and opt out: what
+  -- they are showing was deliberately opened and is not a highlight following a
+  -- finger that has gone.
+  self.touch_clearing_hover = true
+  local repaint = false
+  for _, window in ipairs(self.windows) do
+    local s = window.apply_ui_scale and TheApp.gfx:getUIScale() or 1
+    if window:onMouseMove(x - window.x * s, y - window.y * s, 0, 0) then
+      repaint = true
+    end
+  end
+  self.touch_clearing_hover = false
+  self.tooltip = nil
+  self.tooltip_counter = nil
+  return repaint
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 should this tap wait for a second one?
+--! Answered false by default, so a tap is delivered the instant the finger
+--! lifts. Only the specific things a double tap acts on ever say yes, which is
+--! what keeps the wait off every other tap in the game.
+function UI:onTouchDeferTap()
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 two taps in the same place, in quick
+--! succession. Nothing outside a game responds to one.
+function UI:onTouchDoubleTap()
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 the last finger left the glass.
+--! Reported for every gesture, including the ones that end without emitting
+--! anything at all, so state armed during the gesture can be released exactly
+--! once and cannot survive a cancellation.
+function UI:onTouchGestureEnd()
   return false
 end
 

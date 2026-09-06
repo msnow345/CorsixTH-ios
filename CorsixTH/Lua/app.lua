@@ -80,6 +80,10 @@ function App:App()
     touch_camera = self.onTouchCamera,
     touch_fling = self.onTouchFling,
     touch_catch = self.onTouchCatch,
+    touch_gesture_end = self.onTouchGestureEnd,
+    touch_double_tap = self.onTouchDoubleTap,
+    touch_defer_tap = self.onTouchDeferTap,
+    touch_hover_end = self.onTouchHoverEnd,
     touch_drag_query = self.onTouchDragQuery,
     touch_rotate = self.onTouchRotate,
     touch_longpress_anchor = self.onTouchLongPressAnchor,
@@ -1484,6 +1488,22 @@ end
 
 function App:onTouchCatch(...)
   return self.ui:onTouchCatch(...)
+end
+
+function App:onTouchGestureEnd(...)
+  return self.ui:onTouchGestureEnd(...)
+end
+
+function App:onTouchDoubleTap(...)
+  return self.ui:onTouchDoubleTap(...)
+end
+
+function App:onTouchDeferTap(...)
+  return self.ui:onTouchDeferTap(...)
+end
+
+function App:onTouchHoverEnd(...)
+  return self.ui:onTouchHoverEnd(...)
 end
 
 function App:onTouchDragQuery(...)

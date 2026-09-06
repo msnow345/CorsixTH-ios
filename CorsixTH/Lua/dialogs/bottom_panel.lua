@@ -395,6 +395,12 @@ function UIBottomPanel:setDynamicInfo(info)
 end
 
 function UIBottomPanel:onMouseMove(x, y, dx, dy)
+  -- CorsixTH-iOS @bugfix 2026-09-07 this window uses hover to reveal, and what
+  -- it is showing was deliberately opened by a tap. Releasing the touch hover
+  -- must not take it away again with the same lift that opened it.
+  if self.ui.touch_clearing_hover then
+    return false
+  end
   local repaint = Window.onMouseMove(self, x, y, dx, dy)
   if self:showAdditionalButtons(x, y) then
     repaint = true

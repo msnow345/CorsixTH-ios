@@ -271,6 +271,12 @@ function UIMenuBar:hitTestBar(x, y)
 end
 
 function UIMenuBar:onMouseMove(x, y, dx, dy)
+  -- CorsixTH-iOS @bugfix 2026-09-07 this window uses hover to reveal, and what
+  -- it is showing was deliberately opened by a tap. Releasing the touch hover
+  -- must not take it away again with the same lift that opened it.
+  if self.ui.touch_clearing_hover then
+    return false
+  end
   local s = TheApp.gfx:getUIScale()
   local padding = 6
   local visible = y < self.height * s + padding * s

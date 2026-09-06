@@ -872,6 +872,14 @@ function GameUI:onPinchUpdate(scale)
     -- anchored between the fingers, and again through this accumulator, applied
     -- a tick later, unanchored, and still drifting for several ticks after the
     -- fingers lift. Only the direct path may zoom.
+    --
+    -- KNOWN LIMITATION, and a blocker for upstreaming this file as-is: the gate
+    -- is the platform, not the gesture, so it also silences a genuine trackpad
+    -- pinch on an iPad -- which sends no finger events and so has no other zoom
+    -- path left. Accepted deliberately because this user does not use a
+    -- trackpad. The fix is to suppress the accumulator only while our own touch
+    -- recogniser has a gesture in progress: touch_catch and touch_gesture_end
+    -- already bracket exactly that interval. See docs/port/IOS_PORT_NOTES.md.
     self.current_momentum.z = 0
     return true
   end
@@ -894,6 +902,19 @@ function GameUI:onTouchCatch()
   self.current_momentum.y = 0.0
   self.current_momentum.z = 0.0
   self.touch_glide = nil
+  self:_stopTouchEdgeScroll()
+  return false
+end
+
+--! CorsixTH-iOS @bugfix 2026-09-07 the gesture ended, however it ended.
+--! Reported for cancellations too -- an incoming call, a Control Centre swipe,
+--! palm rejection -- which is the case _stopTouchEdgeScroll's other callers
+--! miss: a carry that is cancelled rather than lifted emits no click and no
+--! fling, so nothing else would ever run. A cancelled carry must place nothing,
+--! but it must not leave the camera running either.
+--!return (boolean) event processed indicator
+function GameUI:onTouchGestureEnd()
+  self.touch_gesture_active = false
   self:_stopTouchEdgeScroll()
   return false
 end
@@ -1118,7 +1139,16 @@ function GameUI:onTouchDragQuery(x, y)
   end
   local placement, wants_button = self:_activePlacement()
   if placement then
-    return wants_button and UI.TOUCH_DRAG_BUTTON or UI.TOUCH_DRAG_CARRY
+    if wants_button then
+      return UI.TOUCH_DRAG_BUTTON
+    end
+    -- A picked-up person has no cancel button anywhere on screen; the only way
+    -- to put them back is the right click UIPlaceStaff:onMouseUp handles. Say
+    -- so, so the long press that produces it is not suppressed.
+    if class.is(placement, UIPlaceStaff) then
+      return UI.TOUCH_DRAG_CARRY_CANCELLABLE
+    end
+    return UI.TOUCH_DRAG_CARRY
   end
   return touch_one_finger_pan and UI.TOUCH_DRAG_CAMERA or UI.TOUCH_DRAG_NONE
 end
@@ -1168,6 +1198,68 @@ function GameUI:onTouchLongPressAnchor()
     y = y + offset_y * zoom
   end
   return x, y
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 the staff member a double tap would pick
+--! up, if any. Staff are the only thing the engine can pick up: Staff:setPickup
+--! exists only on Staff, and Patient:onClick handles no button but "left".
+--!return (Staff) The entity, or nil.
+function GameUI:_pickableEntity()
+  if not self.app.world.user_actions_allowed then
+    return nil
+  end
+  if self:_activePlacement() then
+    return nil
+  end
+  local entity = self.cursor_entity
+  if entity and entity.setPickup and not entity.pickup and not entity.fired then
+    return entity
+  end
+  return nil
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 should this tap wait for a second one?
+--! Only where a double tap would actually do something, which is a member of
+--! staff and nothing else. Every other tap in the game -- buttons, rooms,
+--! patients, bare floor -- answers no and is delivered the instant the finger
+--! lifts.
+--!return (boolean) Whether to hold the tap back.
+function GameUI:onTouchDeferTap()
+  -- Remembered rather than resolved again on the second tap: the whole point is
+  -- to catch someone who is walking, and by the second tap they have moved off
+  -- the point the first one landed on.
+  self.touch_deferred_entity = self:_pickableEntity()
+  return self.touch_deferred_entity ~= nil
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 two quick taps on a member of staff pick
+--! them up. The 400 ms long press this replaces was losing races against people
+--! who walk; a double tap is quicker, and because setPickup takes the entity
+--! rather than a screen point, it cannot miss a moving target at all.
+--!
+--! Picking up establishes a mode that outlives the finger: setPickup queues a
+--! PickupAction which opens UIPlaceStaff, and from there the existing placement
+--! rules apply unchanged -- one finger carries, two fingers pan and zoom, edge
+--! scrolling engages. So the sequence is double tap, lift, then drag and
+--! release, with a two-finger pan anywhere in between.
+--!return (boolean) event processed indicator
+function GameUI:onTouchDoubleTap()
+  local entity = self.touch_deferred_entity
+  self.touch_deferred_entity = nil
+  if not entity or entity.pickup or entity.fired then
+    return false
+  end
+  if not self.app.world.user_actions_allowed then
+    return false
+  end
+  -- Close their dialog if it happens to be the one on screen, which is what
+  -- UIStaff's own pick-up button does.
+  local dialog = self:getWindow(UIStaff)
+  if dialog and dialog.staff ~= entity then
+    dialog = nil
+  end
+  entity:setPickup(self, dialog)
+  return true
 end
 
 --! Check whether the configured mouse drag button is being held down (true) or not (false).

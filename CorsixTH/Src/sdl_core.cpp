@@ -351,6 +351,10 @@ constexpr std::string_view dispatch_frame("frame");
 constexpr std::string_view dispatch_touch_camera("touch_camera");
 constexpr std::string_view dispatch_touch_fling("touch_fling");
 constexpr std::string_view dispatch_touch_catch("touch_catch");
+constexpr std::string_view dispatch_touch_gesture_end("touch_gesture_end");
+constexpr std::string_view dispatch_touch_double_tap("touch_double_tap");
+constexpr std::string_view dispatch_touch_defer_tap("touch_defer_tap");
+constexpr std::string_view dispatch_touch_hover_end("touch_hover_end");
 constexpr std::string_view dispatch_touch_drag_query("touch_drag_query");
 constexpr std::string_view dispatch_touch_rotate("touch_rotate");
 constexpr std::string_view dispatch_touch_longpress_anchor(
@@ -409,8 +413,19 @@ enum class drag_mode {
   button = 1,  // held left-button drag: room sizing, sliders, window dragging
   wheel = 2,   // scroll the list under the finger
   carry = 3,   // position something on the map; lifting drops it
-  camera = 4   // pan the map 1:1, with a flick at the end
+  camera = 4,  // pan the map 1:1, with a flick at the end
+  //! A carry whose only way out is a right click. Handled exactly as `carry`,
+  //! except that the long press is not suppressed: for a picked-up member of
+  //! staff there is no cancel button anywhere on screen, so taking the long
+  //! press away would leave someone holding a person they cannot put down.
+  carry_cancellable = 5
 };
+
+//! Both carry modes drag the same way.
+bool is_carry(int mode) {
+  return mode == static_cast<int>(drag_mode::carry) ||
+         mode == static_cast<int>(drag_mode::carry_cancellable);
+}
 
 //! 600 ms is an RTS figure, chosen where the thing under the finger is not
 //! going anywhere. In CorsixTH the long press is how a member of staff is
@@ -430,6 +445,13 @@ constexpr float zoom_vs_pan_ratio = 0.5f;
 constexpr double pinch_deadband = 0.004;
 //! Drag distance, in window points, per synthetic wheel tick on a list.
 constexpr float wheel_step_pt = 20.0f;
+//! How long a second tap has to arrive to count as a double tap. Long enough
+//! not to demand a sharp double, short enough that the deferred first tap is
+//! not perceived as lag on the few things that defer at all.
+constexpr Uint64 double_tap_window_ms = 300;
+//! How far apart, in window points, two taps may be and still be a double. A
+//! second tap further away than this is a second tap somewhere else.
+constexpr float double_tap_max_move_pt = 32.0f;
 //! Release velocity is measured over a real time window from timestamped
 //! samples rather than a per-frame filter: people ease off as they lift, and a
 //! filter turns a genuine flick into a stop.
@@ -442,6 +464,32 @@ struct sample {
   double ms;
   float x;
   float y;
+};
+
+//! A button press whose release is waiting for a frame to be presented.
+//! CorsixTH draws a button's pressed sprite only while it is held, from
+//! active_button. A synthetic tap that dispatched down and up back to back set
+//! and cleared that within a single pass of the event loop, so the pressed
+//! state existed for zero rendered frames and no button in the game ever
+//! flashed -- a regression against SDL's own touch-mouse emulation, which
+//! delivered its down and up across separate frames. The down still goes out
+//! the instant the finger lifts; only the up waits, for one frame, which is
+//! 8 ms on this panel.
+struct pending_release {
+  bool active{false};
+  int button{0};
+  float x{0.0f};
+  float y{0.0f};
+};
+
+//! A tap that has been held back to see whether a second one follows.
+//! Only taps the game says are worth deferring are ever held, so nothing else
+//! in the game pays any latency for this: see query_defer_tap.
+struct deferred_tap {
+  bool active{false};
+  float x{0.0f};
+  float y{0.0f};
+  Uint64 ms{0};
 };
 
 struct state {
@@ -478,6 +526,8 @@ struct state {
 };
 
 state s;
+deferred_tap held_tap;
+pending_release held_release;
 
 double now_ms() {
   return static_cast<double>(SDL_GetTicksNS()) / 1'000'000.0;
@@ -636,13 +686,40 @@ bool emit_button(lua_State* L, bool down, int button, float x, float y) {
                   {static_cast<double>(button), x, y});
 }
 
+//! Deliver a button release that was waiting for its frame. Called after the
+//! frame has been presented, and defensively before anything else is dispatched,
+//! so a release can never be dropped or arrive out of order behind a later
+//! event. A dropped release would leave the game holding a mouse button down,
+//! which is a great deal worse than a missing highlight.
+bool flush_pending_release(lua_State* L) {
+  if (!held_release.active) {
+    return false;
+  }
+  held_release.active = false;
+  bool repaint = emit_button(L, false, held_release.button, held_release.x,
+                             held_release.y);
+  // A finger does not move away afterwards the way a mouse does, so the hover
+  // the tap's leading motion applied would otherwise stay applied for ever --
+  // every button tapped left looking hovered. Touch hover is transient: it
+  // lasts for the touch and is released with it.
+  repaint = dispatch(L, dispatch_touch_hover_end, {}) || repaint;
+  return repaint;
+}
+
 bool emit_click(lua_State* L, int button, float x, float y) {
+  // Any release still outstanding belongs to an earlier click and must land
+  // before this one starts.
+  bool repaint = flush_pending_release(L);
   // Motion first: CorsixTH highlights buttons, sets the cursor entity and
   // arms tooltips from hover, and a real mouse always moves before it clicks.
-  bool repaint = emit_motion(L, x, y);
+  repaint = emit_motion(L, x, y) || repaint;
   repaint = emit_button(L, true, button, x, y) || repaint;
-  repaint = emit_button(L, false, button, x, y) || repaint;
-  return repaint;
+  held_release.active = true;
+  held_release.button = button;
+  held_release.x = x;
+  held_release.y = y;
+  // Always ask for a frame: the whole point is that the press gets drawn.
+  return true;
 }
 
 bool emit_wheel(lua_State* L, float x, float y, double wheel_y) {
@@ -704,6 +781,49 @@ int query_drag_mode(lua_State* L, float x, float y) {
   }
   lua_pop(L, 2);
   return mode;
+}
+
+//! Would a double tap here do something? Asked only when a tap has already
+//! completed, and answered by the game, which is the only thing that knows what
+//! is under the finger. A false answer -- every button, every room, every
+//! patient, empty floor -- means the tap is delivered immediately, so the
+//! deferral below is confined to the handful of things a double tap acts on.
+bool query_defer_tap(lua_State* L, float x, float y) {
+  push_app_dispatch(L, dispatch_touch_defer_tap);
+  lua_pushnumber(L, x);
+  lua_pushnumber(L, y);
+  const int nargs = 3;
+  bool defer = false;
+  if (lua_pcall(L, nargs + 1, 1, -3 - nargs) != LUA_OK) {
+    std::fprintf(stderr, "Error in touch_defer_tap: %s\n", lua_tostring(L, -1));
+  } else {
+    defer = lua_toboolean(L, -1) != 0;
+  }
+  lua_pop(L, 2);
+  return defer;
+}
+
+//! Deliver a tap that was held back, as the ordinary click it always was.
+bool flush_held_tap(lua_State* L) {
+  if (!held_tap.active) {
+    return false;
+  }
+  held_tap.active = false;
+  log_event("held tap released as a single tap");
+  return emit_click(L, 1, held_tap.x, held_tap.y);
+}
+
+//! Is this press close enough, and soon enough, to be the second of a pair?
+bool continues_held_tap(float x, float y) {
+  if (!held_tap.active) {
+    return false;
+  }
+  if (SDL_GetTicks() - held_tap.ms >= double_tap_window_ms) {
+    return false;
+  }
+  const float dx = x - held_tap.x;
+  const float dy = y - held_tap.y;
+  return SDL_sqrtf(dx * dx + dy * dy) <= double_tap_max_move_pt * s.render_scale;
 }
 
 void begin_two_pending() {
@@ -799,10 +919,12 @@ bool release_fling(lua_State* L) {
 }
 
 bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
+  // Nothing may get between a press and its release.
+  bool repaint_release = flush_pending_release(L);
   const float px = e.tfinger.x;
   const float py = e.tfinger.y;
   const SDL_FingerID id = e.tfinger.fingerID;
-  bool repaint = false;
+  bool repaint = repaint_release;
 
   switch (e.type) {
     case SDL_EVENT_FINGER_DOWN:
@@ -816,6 +938,11 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           s.down_y = s.last_y = py;
           s.down_ticks = SDL_GetTicks();
           s.long_press_suppressed = false;
+          if (!continues_held_tap(px, py)) {
+            // Too late, or too far away, to be the second of a pair: whatever
+            // this press turns out to be, the earlier tap was a single one.
+            repaint = flush_held_tap(L) || repaint;
+          }
           set_phase(phase::pending, "first finger down");
           reset_samples();
           // A finger landing catches a coasting map, as it does in any iOS
@@ -825,13 +952,13 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           repaint = emit_motion(L, px, py) || repaint;
           break;
         case phase::pending:
+          repaint = flush_held_tap(L) || repaint;
           s.f2 = id;
           s.f2x = px;
           s.f2y = py;
           s.f2_down_x = px;
           s.f2_down_y = py;
-          if (query_drag_mode(L, s.down_x, s.down_y) ==
-              static_cast<int>(drag_mode::carry)) {
+          if (is_carry(query_drag_mode(L, s.down_x, s.down_y))) {
             // Something is being placed. A second finger here is a rotate until
             // it moves, exactly as it is once the carry is under way.
             set_phase(phase::carry_armed, "second finger during placement");
@@ -902,6 +1029,9 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
           if (SDL_sqrtf(dx * dx + dy * dy) < dead_zone()) {
             break;
           }
+          // Committing to anything other than a tap settles the question:
+          // release the held tap first so it cannot arrive after this gesture.
+          repaint = flush_held_tap(L) || repaint;
           const int mode = query_drag_mode(L, s.down_x, s.down_y);
           if (mode == static_cast<int>(drag_mode::button)) {
             // Anchor the press at the original touch point: room sizing starts
@@ -917,7 +1047,7 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
             s.last_x = px;
             s.last_y = py;
             set_phase(phase::drag_wheel, "drag over a list");
-          } else if (mode == static_cast<int>(drag_mode::carry)) {
+          } else if (is_carry(mode)) {
             // No button is pressed while carrying. That is the whole point: a
             // second finger, or a cancelled touch, can end the gesture without
             // an outstanding press that the game would read as "place it here".
@@ -1052,9 +1182,30 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
         case phase::pending:
           // A cancelled touch (a call, the notification shade, palm rejection)
           // must not become a committed click.
-          if (e.type == SDL_EVENT_FINGER_UP) {
-            repaint = emit_click(L, 1, s.down_x, s.down_y) || repaint;
+          if (e.type != SDL_EVENT_FINGER_UP) {
+            repaint = flush_held_tap(L) || repaint;
+            break;
           }
+          if (continues_held_tap(s.down_x, s.down_y)) {
+            // Second of a pair. The first was never delivered, so there is no
+            // click to undo and nothing flashes on screen in between.
+            held_tap.active = false;
+            log_event("double tap");
+            repaint = dispatch(L, dispatch_touch_double_tap, {}) || repaint;
+            break;
+          }
+          if (query_defer_tap(L, s.down_x, s.down_y)) {
+            // Hold it back just long enough to see whether a second follows.
+            held_tap.active = true;
+            held_tap.x = s.down_x;
+            held_tap.y = s.down_y;
+            held_tap.ms = SDL_GetTicks();
+            log_event("tap held, waiting for a possible double");
+            break;
+          }
+          // Everything else -- every button, every room, every patient, bare
+          // floor -- clicks immediately, exactly as before.
+          repaint = emit_click(L, 1, s.down_x, s.down_y) || repaint;
           break;
         case phase::drag_pan:
         case phase::two_active:
@@ -1081,6 +1232,15 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
                                                            : "touch cancelled");
       s.f1 = 0;
       s.f2 = 0;
+      // Every route out of a gesture reports the end, including the ones that
+      // emit nothing else: a cancelled carry, a cancelled press, an inert drag,
+      // a two-finger gesture that never started. Some game state is armed by a
+      // pointer entering a region and disarmed by it leaving -- edge scrolling
+      // is -- and a finger leaving the glass is neither, so without this a
+      // touch cancelled by an incoming call or a Control Centre swipe can leave
+      // the camera running until something else happens to touch the screen.
+      // Said once, here, rather than per phase, so no future phase can forget.
+      repaint = dispatch(L, dispatch_touch_gesture_end, {}) || repaint;
       break;
 
     default:
@@ -1093,15 +1253,21 @@ bool handle(lua_State* L, render_target* target, const SDL_Event& e) {
 //! stationary finger produces no SDL events, so an event-driven long press
 //! would never fire.
 bool poll_long_press(lua_State* L) {
+  bool repaint_expired = false;
+  if (held_tap.active && s.ph == phase::idle &&
+      SDL_GetTicks() - held_tap.ms >= double_tap_window_ms) {
+    repaint_expired = flush_held_tap(L);
+  }
   if (s.ph != phase::pending) {
-    return false;
+    return repaint_expired;
   }
   if (SDL_GetTicks() - s.down_ticks < long_press_ms) {
-    return false;
+    return repaint_expired;
   }
   if (s.long_press_suppressed) {
-    return false;
+    return repaint_expired;
   }
+  bool repaint_held = flush_held_tap(L) || repaint_expired;
   if (query_drag_mode(L, s.down_x, s.down_y) ==
       static_cast<int>(drag_mode::carry)) {
     // Right click undoes a placement, and holding still is exactly what someone
@@ -1110,14 +1276,14 @@ bool poll_long_press(lua_State* L) {
     // deliberately left alone, so this finger can still tap or start a carry.
     s.long_press_suppressed = true;
     log_event("long press suppressed while placing");
-    return false;
+    return repaint_held;
   }
   // Follow whatever was under the finger, if it has walked off since.
   float ax = s.down_x;
   float ay = s.down_y;
   const bool anchored = query_long_press_anchor(L, &ax, &ay);
   // No left button was ever sent, so this is a pure right click.
-  const bool repaint = emit_click(L, 3, ax, ay);
+  const bool repaint = emit_click(L, 3, ax, ay) || repaint_held;
   set_phase(phase::longpress,
             anchored ? "held: right click on the entity it started on"
                      : "held: right click where it started");
@@ -1461,6 +1627,17 @@ void mainloop(lua_State* L) {
         }
         infinite_loop_counter = 0;
       } while (fps.limit_fps == false && !SDL_PollEvent(nullptr));
+#ifdef CORSIX_TH_IOS
+      // CorsixTH-iOS @bugfix 2026-09-07 a synthetic tap holds its button down
+      // until a frame has been presented, so the pressed sprite is actually
+      // drawn. This is that frame; release it now.
+      if (touch::flush_pending_release(L)) {
+        SDL_Event repaint_request;
+        SDL_zero(repaint_request);
+        repaint_request.type = SDL_USEREVENT_FRAME;
+        SDL_PushEvent(&repaint_request);
+      }
+#endif
     }
 
     // No events pending - a good time to do a bit of garbage collection
