@@ -114,3 +114,6 @@ CorsixTH/corsix-th
 # Nix
 *.so
 /result*
+
+# CorsixTH-iOS @build 2026-09-06 local signing identity for scripts/build/ios/package-ios.sh
+scripts/build/ios/ios-signing.env
