@@ -569,26 +569,32 @@ CorsixTH is mouse-driven. Give it a touch layer that feels like an iOS app, foll
 GeneralsX deferred-tap architecture (read `PORTING_PLAYBOOK.md` §6 first — the state machine and
 its rationale transfer directly, the gesture *mapping* does not).
 
-### Superseded during implementation: one finger interacts, two fingers navigate
+### Settled gesture model, and where to change it
 
-The gesture mapping below specifies a one-finger drag that pans the map outside placement
-modes and belongs to the active mode inside them. **That distinction was removed by the
-user during Task 7 and no longer describes the shipped behaviour.** What shipped is:
+The mapping below is what shipped, with two refinements settled during Task 7. Read
+`.superpowers/sdd/IOS_PORT_PLAN/task-7-report.md` for what was actually built.
 
-- **One finger interacts** — tap, long press, carry, size, scroll a list. It never moves
-  the camera, in any mode.
-- **Two fingers navigate** — pan by centroid and pinch-zoom, simultaneously, with
-  inertia, in every mode including mid-placement.
-- A one-finger drag with nothing under it is deliberately inert: it emits nothing while
-  it moves and nothing when it lifts. CorsixTH has no drag-box selection, so nothing is
-  lost, and a stray finger can never shift the map out from under a room being sized.
-- Edge scrolling is kept only while something is being carried or sized, where the one
-  finger is occupied.
-- Rotation during a placement is a **second-finger tap**, cycling the existing discrete
-  orientations through `tryNextOrientation`. No new button was added.
+- **One finger, outside a placement** — tap to click, long-press for right-click, drag
+  pans the map 1:1 with inertia.
+- **One finger, inside a placement or room sizing** — carries or sizes only, and never
+  moves the camera. Edge scrolling engages near the screen edges, because that finger
+  cannot also pan. A second-finger tap cycles the orientation where rotation applies,
+  through the existing discrete `tryNextOrientation` steps; **no rotate button was
+  added**.
+- **Two fingers, always, in every mode** — pan by centroid and pinch-zoom,
+  simultaneously, with inertia.
 
-Read the rest of this section for the reasoning and the requirements that still stand;
-read `.superpowers/sdd/IOS_PORT_PLAN/task-7-report.md` for what was actually built.
+Whether one finger pans at all was argued both ways during the task, so both models are
+fully implemented and **`touch_one_finger_pan` in `CorsixTH/Lua/game_ui.lua` chooses
+between them on one line** (default `true`). `false` makes a one-finger drag on open map
+inert — no pan, and no stray click or selection on release — leaving two fingers as the
+only way to move the view. The recogniser in `sdl_core.cpp` carries a phase for each
+answer (`drag_pan` / `drag_none`), so flipping it is a flag change, not a
+re-implementation. It is deliberately not a settings-screen option.
+
+Note that the placement test comes *first* in `GameUI:onTouchDragQuery`, whichever way
+the switch is set: the pan is never reached while something is being placed, rather than
+being suppressed after the fact.
 
 ### Field data: the baseline is already usable — do not regress it
 
