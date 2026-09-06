@@ -48,7 +48,13 @@ These bind every task. A reviewer treats a violation as a defect.
    reformat untouched code; the repo has `.clang-format` — format only lines you add.
 3. **Annotation convention.** Every non-obvious platform change carries a one-line comment
    `// CorsixTH-iOS @<bugfix|feature|build|refactor> <YYYY-MM-DD> <description>`.
-4. **No LuaJIT, ever.** iOS forbids JIT. Vanilla Lua 5.4 only; do not set `WITH_LUAJIT`.
+4. **No LuaJIT, ever.** iOS forbids JIT. Vanilla Lua only; never set `WITH_LUAJIT`. The Lua
+   version follows this repo's own pinned vcpkg baseline, which currently resolves to **5.5.0**
+   — the same version every vcpkg desktop build of this tree gets, so it is not an iOS-specific
+   divergence. Do not add a version override. Known consequence to document, not to fix:
+   CorsixTH's savegame persistence (`CorsixTH/Src/persist_lua.cpp`) writes Lua bytecode, which
+   is not portable across Lua versions, so saves may not interchange with a desktop build
+   linked against 5.4. iOS-to-iOS saves are unaffected.
 5. **No dynamic Lua C modules.** `luafilesystem` and `lpeg` must be statically linked into the
    binary and registered from C (`CorsixTH/Src/main.cpp` already does this under
    `CORSIX_TH_LINK_LUA_MODULES`). Runtime `.so`/`.dylib` module loading does not work in an
