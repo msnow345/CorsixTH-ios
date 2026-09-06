@@ -71,5 +71,38 @@
   <true/>
   <key>UIApplicationSupportsIndirectInputEvents</key>
   <true/>
+  <!-- App icon. `Assets.car` (compiled by scripts/build/ios/make-icons.sh) is the
+       modern mechanism and CFBundleIconName selects the set inside it; the loose
+       AppIcon*@2x.png files named below are the legacy mechanism, kept because
+       SpringBoard serves a cached icon for developer-signed installs and only ever
+       honours the loose PNGs reliably. Both are staged by the packaging script. -->
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
+  <key>CFBundleIcons</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFiles</key>
+      <array>
+        <string>AppIcon60x60</string>
+      </array>
+      <key>CFBundleIconName</key>
+      <string>AppIcon</string>
+    </dict>
+  </dict>
+  <key>CFBundleIcons~ipad</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFiles</key>
+      <array>
+        <string>AppIcon60x60</string>
+        <string>AppIcon76x76</string>
+        <string>AppIcon83.5x83.5</string>
+      </array>
+      <key>CFBundleIconName</key>
+      <string>AppIcon</string>
+    </dict>
+  </dict>
 </dict>
 </plist>
