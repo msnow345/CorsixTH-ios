@@ -87,6 +87,11 @@ function App:App()
     touch_drag_query = self.onTouchDragQuery,
     touch_rotate = self.onTouchRotate,
     touch_longpress_anchor = self.onTouchLongPressAnchor,
+    -- CorsixTH-iOS @feature 2026-09-08 iOS moves the app off screen and can
+    -- kill it while it is there without any further warning. These arrive from
+    -- the SDL application-lifecycle event watch, not from the event queue.
+    app_suspend = self.onSuspend,
+    app_resume = self.onResume,
   }
   self.strings = {}
   self.savegame_version = SAVEGAME_VERSION
@@ -1427,6 +1432,39 @@ end
 
 function App:onWindowActive(...)
   return self.ui:onWindowActive(...)
+end
+
+--! The app is about to leave the screen (iOS).
+--! Called from inside the UIApplicationDelegate callback, which is the last
+--! moment the app is guaranteed to be running: once it is in the background iOS
+--! can reclaim it for memory at any time and with no further notice. So this is
+--! the only chance to write anything down, and it has to be quick, because the
+--! time it takes is spent against the system's transition budget.
+--!return (boolean) false; nothing is drawn while suspended.
+function App:onSuspend()
+  self:saveConfig()
+  self:saveHotkeys()
+  -- Reuse the game's own autosave rather than inventing a save path: it writes
+  -- into Saves/Autosaves, which is where "Continue Game" looks, so a game lost
+  -- to a memory kill comes back from the main menu with one tap.
+  if self.world and not self.moviePlayer.playing then
+    local ok, err = pcall(self.world._executeAutosave, self.world)
+    if not ok then
+      print("Error while saving on suspend: " .. tostring(err))
+    end
+  end
+  return false
+end
+
+--! The app is back on screen (iOS).
+--!return (boolean) false; the next tick asks for the repaint.
+function App:onResume()
+  -- The frame delta is measured against the wall clock, so the whole of the
+  -- time spent in the background would otherwise arrive as one enormous dt.
+  -- App:drawFrame clamps it, but starting from nil is exact rather than merely
+  -- bounded, and it costs one comparison.
+  self.last_frame_ticks = nil
+  return false
 end
 
 --! Window has been resized by the user

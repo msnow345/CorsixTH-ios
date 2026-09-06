@@ -35,6 +35,12 @@ SOFTWARE.
 #include <cstring>
 #include <string_view>
 
+#ifdef CORSIX_TH_IOS
+// CorsixTH-iOS @feature 2026-09-08 phys_footprint is the number iOS's jetsam
+// ledger judges a memory kill against, so it is the one worth reporting.
+#include <mach/mach.h>
+#endif
+
 #include "lua.hpp"
 #include "lua_sdl.h"
 #include "th_gfx.h"
@@ -78,8 +84,24 @@ int l_init(lua_State* L) {
   return 1;
 }
 
+#ifdef CORSIX_TH_IOS
+// CorsixTH-iOS @feature 2026-09-08 set from the moment iOS tells us we are
+// leaving the screen until it tells us we are back. While it is set the game is
+// neither simulated nor presented. Read from SDL's timer thread as well as the
+// main loop, hence atomic.
+std::atomic<bool> app_backgrounded{false};
+#endif
+
 // SDL TimerCallback
 Uint32 timer_frame_callback(void*, SDL_TimerID, Uint32 interval) {
+#ifdef CORSIX_TH_IOS
+  // CorsixTH-iOS @bugfix 2026-09-08 do not queue simulation ticks that will not
+  // be run. They would sit in the event queue for the whole suspension and then
+  // fast-forward the hospital by however long the player was away.
+  if (app_backgrounded.load(std::memory_order_relaxed)) {
+    return interval;
+  }
+#endif
   SDL_Event e;
   e.type = SDL_USEREVENT_TICK;
   SDL_PushEvent(&e);
@@ -96,7 +118,8 @@ Uint32 timer_frame_callback(void*, SDL_TimerID, Uint32 interval) {
 std::atomic<bool> want_display_rate_frames{false};
 
 Uint32 display_frame_callback(void*, SDL_TimerID, Uint32 interval) {
-  if (want_display_rate_frames.load(std::memory_order_relaxed)) {
+  if (want_display_rate_frames.load(std::memory_order_relaxed) &&
+      !app_backgrounded.load(std::memory_order_relaxed)) {
     SDL_Event e;
     SDL_zero(e);
     e.type = SDL_USEREVENT_FRAME;
@@ -378,6 +401,8 @@ constexpr std::string_view dispatch_touch_drag_query("touch_drag_query");
 constexpr std::string_view dispatch_touch_rotate("touch_rotate");
 constexpr std::string_view dispatch_touch_longpress_anchor(
     "touch_longpress_anchor");
+constexpr std::string_view dispatch_app_suspend("app_suspend");
+constexpr std::string_view dispatch_app_resume("app_resume");
 
 // CorsixTH-iOS @feature 2026-09-07 translate raw touches into game input.
 //
@@ -1385,7 +1410,284 @@ bool is_emulated_mouse(const SDL_Event& e) {
   }
 }
 
+//! Wind up whatever gesture is in flight, because the app is about to leave
+//! the screen.
+/*!
+    Backgrounding mid-gesture is the one way the deferred-release machinery can
+    lose a button. `emit_click` holds the mouse-up back for exactly one
+    presented frame so the pressed sprite is actually drawn, and the flush lives
+    in the frame path -- which is precisely what suspension shuts down. Without
+    this, home-swiping during the flash of a tap resumes the game with the left
+    button still down, and the next finger anywhere on the map drags a selection
+    from wherever the tap was.
+
+    iOS does also send SDL_EVENT_FINGER_CANCELED for the touches it takes away,
+    but it is queued, so it arrives after the suspension rather than before it,
+    and it never arrives at all for the deferred release, which is not a touch
+    any more. So do it here, from the app-lifecycle watch, while we still run.
+    The phase is left idle, which makes the cancel events that follow no-ops.
+*/
+void cancel_for_suspend(lua_State* L) {
+  const bool anything = held_release.active || held_tap.active ||
+                        s.ph != phase::idle;
+  if (!anything) {
+    return;
+  }
+  log_event("app suspending: winding up the gesture");
+  // A tap held back to see whether a second one follows will never get its
+  // answer now, so deliver it as the single tap it turned out to be. This runs
+  // before the release flush because emit_click arms a fresh deferred release.
+  flush_held_tap(L);
+  // Then the deferred mouse-up: the game must never be left holding a button.
+  flush_pending_release(L);
+  if (s.ph == phase::drag_mouse) {
+    // The only phase that holds a real button down for the length of the drag.
+    emit_button(L, false, 1, s.last_x, s.last_y);
+  }
+  s.zoom_active = false;
+  set_phase(phase::idle, "app suspending");
+  s.f1 = 0;
+  s.f2 = 0;
+  reset_samples();
+  // Same reasoning as the finger-up path: some game state is armed by the
+  // pointer entering a region and disarmed by it leaving, and a suspension is
+  // neither, so say the gesture ended.
+  dispatch(L, dispatch_touch_gesture_end, {});
+  dispatch(L, dispatch_touch_hover_end, {s.last_x, s.last_y});
+}
+
 }  // namespace touch
+}  // namespace
+#endif
+
+#ifdef CORSIX_TH_IOS
+// CorsixTH-iOS @feature 2026-09-08 iOS application lifecycle.
+//
+// The six application events are never queued. SDL_SendAppEvent hands
+// SDL_EVENT_WILL_ENTER_BACKGROUND and its siblings straight to the event
+// watchers and returns without touching the event queue, exactly because they
+// have to be handled inside the UIApplicationDelegate call stack -- which is
+// also the only window in which iOS still lets the app do work such as writing
+// a save. A `case` for one of them in the main loop's switch can therefore
+// never run, so everything here hangs off SDL_AddEventWatch.
+namespace {
+namespace lifecycle {
+
+//! The state to dispatch into, valid for the length of one mainloop call.
+lua_State* watch_lua = nullptr;
+
+//! Re-entrancy guard. SDL only pumps the UIKit run loop from SDL_PumpEvents, so
+//! in practice the watch fires from SDL_WaitEvent/SDL_PollEvent with a balanced
+//! Lua stack and nothing part-dispatched; a nested notification would not be
+//! survivable, so refuse one rather than corrupt the stack.
+bool dispatching = false;
+
+//! Current and peak physical footprint of the process, in MB.
+void log_memory(const char* when) {
+  task_vm_info_data_t info{};
+  mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) {
+    return;
+  }
+  constexpr double mb = 1024.0 * 1024.0;
+  if (count >= TASK_VM_INFO_REV1_COUNT) {
+    std::printf("[lifecycle] %s: footprint %.1f MB (peak %.1f MB)\n", when,
+                static_cast<double>(info.phys_footprint) / mb,
+                static_cast<double>(info.ledger_phys_footprint_peak) / mb);
+  } else {
+    std::printf("[lifecycle] %s: footprint %.1f MB\n", when,
+                static_cast<double>(info.phys_footprint) / mb);
+  }
+  std::fflush(stdout);
+}
+
+//! Everything that has to happen before the app leaves the screen, in the order
+//! it has to happen in. Runs inside the delegate callback, so this is real time
+//! against iOS's transition budget: it is timed and logged for that reason.
+void on_suspend() {
+  if (watch_lua == nullptr || dispatching) {
+    return;
+  }
+  dispatching = true;
+  const Uint64 started = SDL_GetTicks();
+  // Wind up any gesture first, so no button is left held across the gap.
+  touch::cancel_for_suspend(watch_lua);
+  // Then let Lua write the config, the hotkeys and an autosave.
+  touch::dispatch(watch_lua, dispatch_app_suspend, {});
+  std::printf("[lifecycle] suspend handler took %u ms\n",
+              static_cast<unsigned>(SDL_GetTicks() - started));
+  std::fflush(stdout);
+  dispatching = false;
+}
+
+void on_resume() {
+  if (watch_lua == nullptr || dispatching) {
+    return;
+  }
+  dispatching = true;
+  touch::dispatch(watch_lua, dispatch_app_resume, {});
+  dispatching = false;
+}
+
+//! Drop anything the transition left in the queue that would advance the game.
+//! Simulation ticks stop being pushed the moment app_backgrounded is set, but a
+//! handful can already be in flight when it is, and every one of them is a
+//! whole 18 ms of hospital that the player was not there for. Counted rather
+//! than SDL_FlushEvent'd so the log says how much time was actually saved.
+void discard_stale_frames(const char* when) {
+  std::array<SDL_Event, 64> drop{};
+  int ticks = 0;
+  int frames = 0;
+  int n;
+  while ((n = SDL_PeepEvents(drop.data(), static_cast<int>(drop.size()),
+                             SDL_GETEVENT, SDL_USEREVENT_TICK,
+                             SDL_USEREVENT_TICK)) > 0) {
+    ticks += n;
+  }
+  while ((n = SDL_PeepEvents(drop.data(), static_cast<int>(drop.size()),
+                             SDL_GETEVENT, SDL_USEREVENT_FRAME,
+                             SDL_USEREVENT_FRAME)) > 0) {
+    frames += n;
+  }
+  if (ticks != 0 || frames != 0) {
+    std::printf(
+        "[lifecycle] %s: discarded %d queued ticks (%d ms of simulation) and "
+        "%d repaint requests\n",
+        when, ticks, ticks * usertick_period_ms, frames);
+    std::fflush(stdout);
+  }
+}
+
+//! SDL_GetTicks at the last background transition, for the resume log.
+Uint64 backgrounded_at = 0;
+
+//! Whether the save has already been written for the background we are in.
+/*!
+    WILL_ENTER_BACKGROUND is applicationWillResignActive, and an app that was
+    never active does not resign: measured on the iPad with the screen asleep,
+    an app launched into the background gets DID_ENTER_BACKGROUND and nothing
+    else at all. Doing the save only on WILL would silently skip it there, so
+    DID is a fallback rather than merely a belt to its braces.
+*/
+bool saved_for_this_background = false;
+
+//! Stop the world and write it down. Idempotent within one background episode.
+void go_to_background(const char* why) {
+  want_display_rate_frames.store(false, std::memory_order_relaxed);
+  if (saved_for_this_background) {
+    return;
+  }
+  saved_for_this_background = true;
+  th::sound::pause_audio_device();
+  backgrounded_at = SDL_GetTicks();
+  on_suspend();
+  log_memory(why);
+}
+
+bool SDLCALL watch(void*, SDL_Event* e) {
+  switch (e->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+    case SDL_EVENT_LOW_MEMORY:
+    case SDL_EVENT_TERMINATING:
+      break;
+    default:
+      // The watch is called for every event on whichever thread pushed it --
+      // the simulation tick arrives here on SDL's timer thread -- so get out
+      // before touching anything that is not thread safe.
+      return true;
+  }
+  if (!SDL_IsMainThread()) {
+    return true;
+  }
+
+  switch (e->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+      // applicationWillResignActive, and the preferred moment for all of this:
+      // the app is still active, so nothing here is spent against the system's
+      // background-transition budget. Stop presenting here rather than at
+      // DID_ENTER_BACKGROUND too -- drawing into a drawable the compositor is
+      // about to take away is what queues the acquire timeouts that surface as
+      // a multi-second input hang on the way back in.
+      app_backgrounded.store(true, std::memory_order_relaxed);
+      go_to_background("entering background");
+      break;
+
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+      // From here the app can lose the CPU at any moment, so nothing may still
+      // be running -- and if there was no resign-active, this is the only
+      // notice we get, so the save happens here instead.
+      app_backgrounded.store(true, std::memory_order_relaxed);
+      go_to_background("entered background");
+      discard_stale_frames("did enter background");
+      break;
+
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+      // Order matters: drop the stale ticks before letting the timer queue new
+      // ones, or a tick pushed in between survives the flush.
+      discard_stale_frames("will enter foreground");
+      saved_for_this_background = false;
+      app_backgrounded.store(false, std::memory_order_relaxed);
+      break;
+
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+      app_backgrounded.store(false, std::memory_order_relaxed);
+      saved_for_this_background = false;
+      if (backgrounded_at != 0) {
+        std::printf("[lifecycle] back after %.1f s off screen\n",
+                    static_cast<double>(SDL_GetTicks() - backgrounded_at) /
+                        1000.0);
+        std::fflush(stdout);
+        backgrounded_at = 0;
+      }
+      // Un-suspend the audio device. This also covers the case Task 3 added it
+      // for: an AVAudioSession interruption that ends while we are away.
+      th::sound::resume_audio_device();
+      on_resume();
+      log_memory("returned to foreground");
+      break;
+
+    case SDL_EVENT_LOW_MEMORY:
+      log_memory("low memory warning");
+      if (watch_lua != nullptr && !dispatching) {
+        lua_gc(watch_lua, LUA_GCCOLLECT, 0);
+        log_memory("after full collection");
+      }
+      break;
+
+    case SDL_EVENT_TERMINATING:
+      // iOS is killing us. If we are still in front this is the only warning
+      // there will be; if we are not, the background save already ran.
+      log_memory("terminating");
+      app_backgrounded.store(true, std::memory_order_relaxed);
+      go_to_background("terminating");
+      break;
+
+    default:
+      break;
+  }
+  return true;
+}
+
+void install(lua_State* L) {
+  watch_lua = L;
+  if (!SDL_AddEventWatch(watch, nullptr)) {
+    std::fprintf(stderr, "SDL_AddEventWatch failed: %s\n", SDL_GetError());
+    watch_lua = nullptr;
+    return;
+  }
+  log_memory("main loop start");
+}
+
+void uninstall() {
+  SDL_RemoveEventWatch(watch, nullptr);
+  watch_lua = nullptr;
+}
+
+}  // namespace lifecycle
 }  // namespace
 #endif
 
@@ -1418,6 +1720,7 @@ void mainloop(lua_State* L) {
               display_frame_period);
   SDL_TimerID display_frame_timer =
       SDL_AddTimer(display_frame_period, display_frame_callback, nullptr);
+  lifecycle::install(L);
 #endif
 
   while ((wait_error = SDL_WaitEvent(&e))) {
@@ -1638,13 +1941,18 @@ void mainloop(lua_State* L) {
         // CorsixTH-iOS @bugfix 2026-09-06 an AVAudioSession interruption (call,
         // Siri, alarm) or an output route change (headphones in/out) can leave
         // the audio device suspended once the interruption ends, which reads as
-        // "the game went permanently silent". Nudge the device whenever we come
-        // back to the front or the device list changes; track pause state is
-        // deliberately untouched.
-        case SDL_EVENT_DID_ENTER_FOREGROUND:
+        // "the game went permanently silent". Nudge the device whenever the
+        // device list changes; track pause state is deliberately untouched.
+        // CorsixTH-iOS @bugfix 2026-09-08 SDL_EVENT_DID_ENTER_FOREGROUND used to
+        // be listed here too, and could never have fired: SDL never queues the
+        // application events. It is handled in the lifecycle event watch now.
+        // Not while backgrounded: resuming the device we just paused would
+        // leave audio running behind the app switcher.
         case SDL_EVENT_AUDIO_DEVICE_ADDED:
         case SDL_EVENT_AUDIO_DEVICE_REMOVED:
-          th::sound::resume_audio_device();
+          if (!app_backgrounded.load(std::memory_order_relaxed)) {
+            th::sound::resume_audio_device();
+          }
           nargs = 0;
           break;
 #endif
@@ -1664,6 +1972,19 @@ void mainloop(lua_State* L) {
       }
     } while (SDL_PollEvent(&e));
 #ifdef CORSIX_TH_IOS
+    // CorsixTH-iOS @feature 2026-09-08 while iOS has the app off screen, neither
+    // simulate nor present. Events still arrive and are still dispatched -- the
+    // window and focus changes of the transition itself, and the touch cancels
+    // iOS sends for the fingers it took away -- but nothing advances the world
+    // and nothing touches the GPU. Rendering around a suspension queues
+    // drawable-acquire timeouts that surface as a multi-second input hang after
+    // the resume, and running the tick would fast-forward the hospital by
+    // however long the player was away.
+    if (app_backgrounded.load(std::memory_order_relaxed)) {
+      lua_gc(L, LUA_GCSTEP, 2);
+      infinite_loop_counter = 0;
+      continue;
+    }
     // CorsixTH-iOS @feature 2026-09-07 a motionless finger emits no events, so
     // the long-press timer has to be polled. The 18 ms simulation tick
     // guarantees this runs even when nothing else is happening.
@@ -1701,8 +2022,12 @@ void mainloop(lua_State* L) {
                                          std::memory_order_relaxed);
 #endif
           do_frame = do_frame || still_animating;
-          lua_pop(L, 2);
         }
+        // CorsixTH-iOS @bugfix 2026-09-08 unconditionally, including on the
+        // error path: leaving the handler and its result on the stack every
+        // failing frame overflows the Lua stack and panics the process, which
+        // on iOS is a crash rather than an exit.
+        lua_pop(L, 2);
         infinite_loop_counter = 0;
       } while (fps.limit_fps == false && !SDL_PollEvent(nullptr));
 #ifdef CORSIX_TH_IOS
@@ -1729,6 +2054,9 @@ void mainloop(lua_State* L) {
 
 leave_loop:
 #ifdef CORSIX_TH_IOS
+  // Before the timers, so a lifecycle event arriving during teardown cannot
+  // find a lua_State that main.cpp is about to close.
+  lifecycle::uninstall();
   SDL_RemoveTimer(display_frame_timer);
 #endif
   SDL_RemoveTimer(timer);

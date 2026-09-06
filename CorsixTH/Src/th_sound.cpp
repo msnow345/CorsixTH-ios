@@ -177,16 +177,36 @@ void log_ios_audio_session_category() {
   std::fflush(stdout);
 }
 
-void resume_audio_device() {
+//! The mixer's playback device, or 0 if there is no mixer.
+SDL_AudioDeviceID mixer_device() {
   if (!mixer) {
-    return;
+    return 0;
   }
-  const SDL_AudioDeviceID device = static_cast<SDL_AudioDeviceID>(
+  return static_cast<SDL_AudioDeviceID>(
       SDL_GetNumberProperty(MIX_GetMixerProperties(mixer->get_mixer()),
                             MIX_PROP_MIXER_DEVICE_NUMBER, 0));
+}
+
+void resume_audio_device() {
+  const SDL_AudioDeviceID device = mixer_device();
   if (device != 0 && SDL_AudioDevicePaused(device)) {
     std::printf("Audio device was suspended; resuming it.\n");
+    std::fflush(stdout);
     SDL_ResumeAudioDevice(device);
+  }
+}
+
+// CorsixTH-iOS @feature 2026-09-08 stop the mixer for the length of a
+// suspension. Everything the game plays -- effects, speech and the MIDI music,
+// which is synthesised into this same mixer -- comes from this one device, so
+// pausing it is the whole of "pause audio on background", and the music resumes
+// from where it stopped rather than restarting.
+void pause_audio_device() {
+  const SDL_AudioDeviceID device = mixer_device();
+  if (device != 0 && !SDL_AudioDevicePaused(device)) {
+    std::printf("Pausing the audio device for backgrounding.\n");
+    std::fflush(stdout);
+    SDL_PauseAudioDevice(device);
   }
 }
 #endif

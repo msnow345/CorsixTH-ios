@@ -80,6 +80,14 @@ void log_ios_audio_session_category();
    not touch track pause state, so a track the player paused stays paused.
 */
 void resume_audio_device();
+
+//! Suspend the mixer's audio device.
+/*!
+    The counterpart to resume_audio_device, called when iOS moves the app off
+    screen. Like its counterpart it does not touch track pause state, so
+    whatever the player had paused stays paused across the suspension.
+*/
+void pause_audio_device();
 #endif
 
 //! Log the peak and RMS level of the final mixed output, once a second.
