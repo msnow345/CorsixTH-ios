@@ -1174,7 +1174,11 @@ function App:fixConfig()
     elseif key == "player_name" then
       value = value:match('^%s*(.*%S)') or "" -- Trim spaces
       if value:len() == 0 then -- If empty, use computer user's name,
-        value = os.getenv("USER") or os.getenv("USERNAME")
+        -- CorsixTH-iOS @bugfix 2026-09-06 os.getenv("USER") and os.getenv("USERNAME")
+        -- can both be nil (e.g. a sandbox that sets neither), and the value:match()
+        -- below then indexes nil and crashes. The "" fallback keeps value a string
+        -- in every case; the "PLAYER" default a few lines down still applies.
+        value = os.getenv("USER") or os.getenv("USERNAME") or ""
       end
       value = value:match('^%s*(.*%S)') or ""
       if value:len() == 0 then -- unless that is also empty
