@@ -28,6 +28,9 @@ local UIBottomPanel = _G["UIBottomPanel"]
 
 -- CorsixTH-iOS @bugfix 2026-09-07 true where the only pointer is a finger.
 local touch_input = TH.GetCompileOptions().os == "ios"
+-- Matches the gesture log in sdl_core.cpp: which presses on this panel were
+-- spent revealing the hover-only buttons, and which went straight through.
+local touch_log = touch_input and os.getenv("CORSIXTH_TOUCH_LOG") ~= nil
 
 local MESSAGE_DOOR_FULLY_OPEN = 0
 local MESSAGE_DOOR_FULLY_SHUT = 22
@@ -412,6 +415,11 @@ function UIBottomPanel:showAdditionalButtons(x, y)
       -- under the finger, before the user has seen what appeared. Remember that
       -- they have only just been revealed, so the tap that revealed them can be
       -- spent on doing exactly that: the next one selects.
+      --
+      -- Only presses in the region they occupy are spent that way. Hovering
+      -- anywhere on the panel reveals them, this end included, but the bank
+      -- button and the centre toolbar are permanently visible and a tap on
+      -- something already on screen must act on the first tap.
       self.touch_awaiting_reveal = touch_input
     end
   else -- Outside the rectangle
@@ -424,14 +432,42 @@ function UIBottomPanel:showAdditionalButtons(x, y)
   end
 end
 
-function UIBottomPanel:onMouseDown(button, x, y)
-  if self.touch_awaiting_reveal then
-    self.touch_awaiting_reveal = false
-    if button == "left" and self:hitTest(x, y) then
-      -- Swallow it. No button is armed, so the matching release does nothing
-      -- either, and the buttons are now visible to be aimed at properly.
-      return true
+--! Is this point in the part of the panel that hover-reveals?
+--! CorsixTH-iOS @bugfix 2026-09-07 only the right-hand stretch of the panel
+--! swaps itself for buttons on hover; the bank button and the centre toolbar
+--! are permanently on screen. The region is derived from the revealed panels
+--! themselves rather than written down, so it cannot drift away from them --
+--! and it starts at the leftmost of them, which is the dynamic info bar they
+--! replace.
+function UIBottomPanel:_isInHoverRevealRegion(x, y)
+  if not self:hitTest(x, y) then
+    return false
+  end
+  local left
+  for _, panel in ipairs(self.additional_panels) do
+    if not left or panel.x < left then
+      left = panel.x
     end
+  end
+  return left ~= nil and x >= left * TheApp.gfx:getUIScale()
+end
+
+function UIBottomPanel:onMouseDown(button, x, y)
+  -- Cleared on any press, wherever it landed: by the time a second one arrives
+  -- the buttons have been on screen for a frame and have been seen.
+  local awaiting = self.touch_awaiting_reveal
+  self.touch_awaiting_reveal = false
+  local in_region = self:_isInHoverRevealRegion(x, y)
+  if touch_log and button == "left" and self:hitTest(x, y) then
+    print(("[panel] press x=%.0f %s %s"):format(x,
+        in_region and "in reveal region" or "on an always-visible control",
+        (awaiting and in_region) and "-> spent revealing" or "-> passed through"))
+    io.stdout:flush()
+  end
+  if awaiting and button == "left" and in_region then
+    -- Swallow it. No button is armed, so the matching release does nothing
+    -- either, and the buttons are now visible to be aimed at properly.
+    return true
   end
   return Window.onMouseDown(self, button, x, y)
 end
