@@ -38,6 +38,11 @@ local App = _G["App"]
 App.MIN_WINDOW_WIDTH = 640
 App.MIN_WINDOW_HEIGHT = 480
 
+-- Period of the simulation tick in milliseconds. Must match
+-- usertick_period_ms in CorsixTH/Src/lua_sdl.h. Rates which were historically
+-- expressed per tick are scaled against this when applied per rendered frame.
+App.TICK_PERIOD_MS = 18
+
 function App:App()
   self.command_line = {}
   self.config = {}
@@ -1327,13 +1332,26 @@ for i = 1, 30 do fps_history[i] = 0 end
 local fps_sum = 0 -- Sum of fps_history array
 local fps_next = 1 -- Used to loop through fps_history when [over]writing
 
+--! Draw one frame.
+--! Everything which advances the simulation lives in App:onTick; this function
+--! renders, and additionally advances anything which should move at the
+--! rendered frame rate rather than at the fixed tick rate (the camera).
+--!return (boolean) Whether something is still animating and another frame
+-- should be drawn as soon as the display can show it.
 function App:drawFrame()
+  local animating = false
   self.video:startFrame()
   if (self.moviePlayer.playing) then
     self.key_modifiers = {}
     self.moviePlayer:refresh()
   else
     self.key_modifiers = SDL.getKeyModifiers()
+    local now = SDL.getTicks()
+    local dt = now - (self.last_frame_ticks or now)
+    self.last_frame_ticks = now
+    -- Clamp so that a stall (loading, backgrounding) cannot teleport the camera
+    if dt < 0 then dt = 0 elseif dt > 100 then dt = 100 end
+    animating = self.ui:onFrame(dt)
     self.ui:draw(self.video)
   end
   self.video:endFrame()
@@ -1344,6 +1362,8 @@ function App:drawFrame()
     fps_sum = fps_sum + fps_history[fps_next]
     fps_next = (fps_next % #fps_history) + 1
   end
+
+  return animating
 end
 
 function App:getFPS()

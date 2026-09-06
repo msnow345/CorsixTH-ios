@@ -1070,6 +1070,17 @@ function UI:onPinchEnd()
   return false
 end
 
+--! Called once per rendered frame, before drawing, with the time since the
+--! previous frame. Unlike UI:onTick this is not a fixed-rate simulation step:
+--! it can run at the display refresh rate, so anything done here must be
+--! scaled by the elapsed time.
+--!param dt (number) Milliseconds since the previous rendered frame.
+--!return (boolean) Whether something is still animating and another frame
+-- should be drawn as soon as the display can show it.
+function UI:onFrame(dt) -- luacheck: ignore 212
+  return false
+end
+
 function UI:onTick()
   Window.onTick(self)
   local repaint = false

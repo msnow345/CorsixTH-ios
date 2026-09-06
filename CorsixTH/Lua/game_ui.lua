@@ -99,6 +99,9 @@ function GameUI:GameUI(app, local_hospital, map_editor)
 
   self.momentum = app.config.scrolling_momentum
   self.current_momentum = {x = 0.0, y = 0.0, z = 0.0}
+  -- Sub-unit camera movement left over from the previous rendered frame.
+  self.scroll_residual_x = 0.0
+  self.scroll_residual_y = 0.0
 
   self.recallpositions = {}
 
@@ -849,28 +852,60 @@ function GameUI:_isMouseScrollButtonDown()
   return mouse_scroll_button_down
 end
 
-function GameUI:onTick()
-  local repaint = UI.onTick(self)
+--! Scroll the map by a possibly fractional amount, carrying the sub-unit
+--! remainder over to the next call.
+--! GameUI:scrollMap rounds the camera to a whole map-screen unit, so feeding it
+--! the small deltas produced at a high frame rate would quantise most of the
+--! movement away. Accumulating the remainder keeps the scroll speed correct at
+--! any frame rate and removes the visible stepping at native resolution.
+--!param dx (number) Horizontal amount to scroll by.
+--!param dy (number) Vertical amount to scroll by.
+function GameUI:_scrollMapFractional(dx, dy)
+  dx = dx + (self.scroll_residual_x or 0)
+  dy = dy + (self.scroll_residual_y or 0)
+  local old_x, old_y = self.screen_offset_x, self.screen_offset_y
+  self:scrollMap(dx, dy)
+  -- Clamped, because against the edge of the visible diamond the requested and
+  -- the applied movement can differ by an arbitrary amount.
+  local rx = dx - (self.screen_offset_x - old_x)
+  local ry = dy - (self.screen_offset_y - old_y)
+  self.scroll_residual_x = rx < -1 and -1 or (rx > 1 and 1 or rx)
+  self.scroll_residual_y = ry < -1 and -1 or (ry > 1 and 1 or ry)
+end
+
+--! Advance the camera. Called once per rendered frame, which may be far more
+--! often than the simulation tick, so every rate below is expressed per
+--! classic tick and scaled by the frame's elapsed time. At exactly one frame
+--! per tick this reduces to the behaviour it replaced.
+--!param dt (number) Milliseconds since the previous rendered frame.
+--!return (boolean) Whether the camera is still moving.
+function GameUI:onFrame(dt)
+  local ticks = dt / App.TICK_PERIOD_MS
+  local moving = false
+  local momentum = self.current_momentum
   if not self:_isMouseScrollButtonDown() then
-    if math.abs(self.current_momentum.x) < 0.2 and math.abs(self.current_momentum.y) < 0.2 then
+    local decay = self.momentum ^ ticks
+    if math.abs(momentum.x) < 0.2 and math.abs(momentum.y) < 0.2 then
       -- Stop scrolling
-      self.current_momentum.x = 0.0
-      self.current_momentum.y = 0.0
+      momentum.x = 0.0
+      momentum.y = 0.0
     else
-      self.current_momentum.x = self.current_momentum.x * self.momentum
-      self.current_momentum.y = self.current_momentum.y * self.momentum
-      self:scrollMap(self.current_momentum.x, self.current_momentum.y)
+      momentum.x = momentum.x * decay
+      momentum.y = momentum.y * decay
+      self:_scrollMapFractional(momentum.x * ticks, momentum.y * ticks)
+      moving = true
     end
-    if math.abs(self.current_momentum.z) > 0.2 then
-      self.app.world:adjustZoom(self.current_momentum.z)
+    if math.abs(momentum.z) > 0.2 then
+      self.app.world:adjustZoom(momentum.z * ticks)
+      moving = true
     end
-    self.current_momentum.z = self.current_momentum.z * self.momentum
+    momentum.z = momentum.z * decay
   end
   if self.tick_scroll_amount or self.tick_scroll_amount_mouse then
     -- The scroll amount per tick gradually increases as the duration of the
     -- scroll increases due to this multiplier.
     local mult = self.tick_scroll_mult
-    mult = mult + 0.02
+    mult = mult + 0.02 * ticks
     if mult > 2 then
       mult = 2
     end
@@ -907,11 +942,16 @@ function GameUI:onTick()
       mult = mult * self.app.config.scroll_speed * 0.25
     end
 
-    self:scrollMap(dx * mult, dy * mult)
-    repaint = true
+    self:_scrollMapFractional(dx * mult * ticks, dy * mult * ticks)
+    moving = true
   else
     self.tick_scroll_mult = 1
   end
+  return moving
+end
+
+function GameUI:onTick()
+  local repaint = UI.onTick(self)
   if self:onCursorWorldPositionChange() then
     repaint = true
   end
