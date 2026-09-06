@@ -136,8 +136,8 @@ MIX_Audio* createMusicAudio(SDL_IOStream* stream) {
     const SDL_PropertiesID props = MIX_GetAudioProperties(audio);
     const char* decoder =
         SDL_GetStringProperty(props, MIX_PROP_AUDIO_DECODER_STRING, "?");
-    const Sint64 frames =
-        MIX_GetAudioDuration(audio) < 0 ? 0 : MIX_GetAudioDuration(audio);
+    const Sint64 duration = MIX_GetAudioDuration(audio);
+    const Sint64 frames = duration < 0 ? 0 : duration;
     std::printf("Music loaded: decoder=%s duration=%.1fs soundfont=%s\n",
                 decoder, MIX_AudioFramesToMS(audio, frames) / 1000.0,
                 have_sound_font ? sound_font.c_str() : "(none)");
