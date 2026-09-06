@@ -30,6 +30,10 @@ SOFTWARE.
 
 #include <cstdio>
 #include <memory>
+#ifdef CORSIX_TH_IOS
+#include <cstdlib>
+#include <string>
+#endif
 
 #include "../Src/bootstrap.h"
 #include "../Src/lua.hpp"
@@ -42,6 +46,36 @@ SOFTWARE.
 #ifdef WITH_TRACY
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyLua.hpp>
+#endif
+
+#ifdef CORSIX_TH_IOS
+namespace {
+
+// CorsixTH-iOS @feature 2026-09-06 config_finder.lua falls back to $HOME/.config, but
+// the iOS sandbox rejects mkdir at the container root with EPERM, so that lookup fails
+// and lands on the read-only bundle. Point XDG_CONFIG_HOME at the app's Documents
+// directory instead: writable, and visible in the Files app.
+void set_ios_config_home() {
+  std::string path;
+  const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+  if (documents != nullptr) {
+    path = documents;
+  } else {
+    char* prefs = SDL_GetPrefPath("CorsixTH", "CorsixTH");
+    if (prefs != nullptr) {
+      path = prefs;
+      SDL_free(prefs);
+    }
+  }
+  if (path.empty()) {
+    std::fprintf(stderr, "Unable to locate a writable directory on this device.\n");
+    return;
+  }
+  setenv("XDG_CONFIG_HOME", path.c_str(), 1);
+  std::printf("Writable state directory: %s\n", path.c_str());
+}
+
+}  // namespace
 #endif
 
 // Template magic for checking type equality
@@ -114,6 +148,10 @@ int main(int argc, char** argv) {
 
 #ifdef WITH_UPDATE_CHECK
   curl_global_init(CURL_GLOBAL_DEFAULT);
+#endif
+
+#ifdef CORSIX_TH_IOS
+  set_ios_config_home();
 #endif
 
   bool bRun = true;
