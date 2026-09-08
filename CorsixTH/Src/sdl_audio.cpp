@@ -27,8 +27,10 @@ SOFTWARE.
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "lua.hpp"
 #include "lua_sdl.h"
@@ -52,7 +54,13 @@ class music {
 
 namespace {
 
-const char* sound_font = nullptr;
+// CorsixTH-iOS @bugfix 2026-09-06 this used to hold the const char* that
+// luaL_optlstring returned, i.e. a pointer into a Lua string that nothing kept
+// alive past l_init. Once that string was collected, the soundfont path handed
+// to fluidsynth was whatever happened to be left in the freed memory, and the
+// decoder silently produced a synth with no presets loaded. Own the string.
+std::string sound_font;
+bool have_sound_font = false;
 
 void audio_music_over_callback(void*, MIX_Track*) {
   SDL_Event e;
@@ -61,8 +69,18 @@ void audio_music_over_callback(void*, MIX_Track*) {
 }
 
 int l_init(lua_State* L) {
-  size_t soundfont_path_len;
-  sound_font = luaL_optlstring(L, 1, nullptr, &soundfont_path_len);
+  size_t soundfont_path_len = 0;
+  const char* soundfont_path =
+      luaL_optlstring(L, 1, nullptr, &soundfont_path_len);
+  have_sound_font = soundfont_path != nullptr;
+  sound_font.assign(have_sound_font ? soundfont_path : "", soundfont_path_len);
+
+  // CorsixTH-iOS @feature 2026-09-06 the soundfont is the single most common
+  // reason for silent MIDI music, and on a device you cannot inspect the
+  // filesystem of, the resolved path is worth a line of log.
+  std::printf("MIDI soundfont: %s\n",
+              have_sound_font ? sound_font.c_str() : "(none found)");
+  std::fflush(stdout);
 
   if (!th::sound::init()) {
     lua_pushboolean(L, 0);
@@ -103,12 +121,31 @@ MIX_Audio* createMusicAudio(SDL_IOStream* stream) {
                          th::sound::get_mixer()->get_mixer());
   SDL_SetBooleanProperty(audioProps, MIX_PROP_AUDIO_LOAD_PREDECODE_BOOLEAN,
                          true);
-  const char* sf = sound_font;
-  if (sf) {
-    SDL_SetStringProperty(audioProps, mix_prop_soundfont_path_string, sf);
+  if (have_sound_font) {
+    SDL_SetStringProperty(audioProps, mix_prop_soundfont_path_string,
+                          sound_font.c_str());
   }
   MIX_Audio* audio = MIX_LoadAudioWithProperties(audioProps);
   SDL_DestroyProperties(audioProps);
+
+  // CorsixTH-iOS @feature 2026-09-06 report which SDL_mixer decoder actually
+  // claimed the track and how long it decoded to. "FLUIDSYNTH" plus a plausible
+  // duration is how you tell real synthesised music from a track that loaded
+  // but produces nothing.
+  if (audio != nullptr) {
+    const SDL_PropertiesID props = MIX_GetAudioProperties(audio);
+    const char* decoder =
+        SDL_GetStringProperty(props, MIX_PROP_AUDIO_DECODER_STRING, "?");
+    const Sint64 duration = MIX_GetAudioDuration(audio);
+    const Sint64 frames = duration < 0 ? 0 : duration;
+    std::printf("Music loaded: decoder=%s duration=%.1fs soundfont=%s\n",
+                decoder, MIX_AudioFramesToMS(audio, frames) / 1000.0,
+                have_sound_font ? sound_font.c_str() : "(none)");
+    std::fflush(stdout);
+  } else {
+    std::printf("Music failed to load: %s\n", SDL_GetError());
+    std::fflush(stdout);
+  }
 
   return audio;
 }

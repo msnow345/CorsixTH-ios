@@ -108,7 +108,9 @@ option(
   ${SEARCH_LOCAL_DATADIRS_DEFAULT}
 )
 
-if(APPLE)
+# CorsixTH-iOS @build 2026-09-06 there is no /Library/Fonts on iOS; the bundled
+# CorsixTHUnicode.ttf is found by Graphics:loadFontFile's bundle-root fallback instead.
+if(APPLE AND NOT IOS)
   set(WITH_FONT_DEFAULT "/Library/Fonts/Arial Unicode.ttf")
 else()
   set(WITH_FONT_DEFAULT "")

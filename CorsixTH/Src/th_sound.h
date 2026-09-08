@@ -67,6 +67,37 @@ bool init();
 void quit();
 sdl_mixer* get_mixer();
 
+#ifdef CORSIX_TH_IOS
+//! Print the AVAudioSession category SDL settled on, for the gamelog/console.
+void log_ios_audio_session_category();
+
+//! Un-suspend the mixer's audio device.
+/*!
+    An AVAudioSession interruption (call, Siri, alarm) or an output route change
+   can leave the device suspended after the interruption ends. Calling this when
+   the app returns to the foreground, or when the audio device list changes,
+   guarantees the game is never left permanently silent. It deliberately does
+   not touch track pause state, so a track the player paused stays paused.
+*/
+void resume_audio_device();
+
+//! Suspend the mixer's audio device.
+/*!
+    The counterpart to resume_audio_device, called when iOS moves the app off
+    screen. Like its counterpart it does not touch track pause state, so
+    whatever the player had paused stays paused across the suspension.
+*/
+void pause_audio_device();
+#endif
+
+//! Log the peak and RMS level of the final mixed output, once a second.
+/*!
+    Off unless the CORSIXTH_AUDIO_LEVEL_METER hint (or environment variable) is
+   set to a true value. This is the only way to tell "playing correctly" from
+   "playing silence" on a device you cannot listen to.
+*/
+void enable_level_meter_if_requested();
+
 }  // namespace th::sound
 
 //! Utility class for accessing Theme Hospital's SOUND-0.DAT

@@ -160,9 +160,15 @@ function UIDirectoryBrowser:UIDirectoryBrowser(ui, mode, instruction, treenode_c
   else
     self.font = ui.app.gfx:loadBuiltinFont()
     self:setDefaultPosition(0.05, 0.5)
-    self:addKeyHandler("global_cancel", self.exit)
-    self:addKeyHandler("global_cancel_alt", self.exit)
-    self.exit_button:setLabel(_S.install.exit, self.font):makeButton(0, 0, 100, 18, nil, self.exit)
+    -- CorsixTH-iOS @bugfix 2026-09-08 the other route to App:exit, from the
+    -- first-run "find your Theme Hospital data" dialog. On iOS there is nothing
+    -- for it to do, so do not offer it rather than leave a dead button: the
+    -- player leaves with the home gesture and comes back to this same dialog.
+    if not TheApp.ios then
+      self:addKeyHandler("global_cancel", self.exit)
+      self:addKeyHandler("global_cancel_alt", self.exit)
+      self.exit_button:setLabel(_S.install.exit, self.font):makeButton(0, 0, 100, 18, nil, self.exit)
+    end
   end
 
   -- Create the root item (or items, on Windows), and set it as the

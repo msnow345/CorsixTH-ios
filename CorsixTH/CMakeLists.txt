@@ -36,6 +36,11 @@ if(USE_SOURCE_DATADIRS)
 elseif(MSVC)
   set(CORSIX_TH_DATADIR CorsixTH)
   set(CORSIX_TH_INTERPRETER_PATH ${CORSIX_TH_INTERPRETER_NAME})
+elseif(IOS)
+  # CorsixTH-iOS @build 2026-09-06 an iOS .app is flat: CorsixTH.lua, Lua/, Bitmap/ and
+  # friends sit directly beside the executable, and there is no install prefix on device.
+  set(CORSIX_TH_DATADIR CorsixTH.app)
+  set(CORSIX_TH_INTERPRETER_PATH ${CORSIX_TH_INTERPRETER_NAME})
 elseif(APPLE)
   set(CORSIX_TH_DATADIR CorsixTH.app/Contents/Resources/)
   set(CORSIX_TH_INTERPRETER_PATH ${CMAKE_INSTALL_PREFIX}/${CORSIX_TH_DATADIR}/${CORSIX_TH_INTERPRETER_NAME})
@@ -48,8 +53,32 @@ if(FETCH_UNICODE_FONT OR FETCH_SDL_MIXER OR FETCH_SOUNDFONT)
   include(FetchContent)
 endif()
 
+if(IOS)
+  # CorsixTH-iOS @build 2026-09-06 bundle identity. Override at configure time; never
+  # commit a personal identifier or development team into the tree.
+  set(CORSIXTH_IOS_BUNDLE_ID "com.corsixth.CorsixTH" CACHE STRING "iOS CFBundleIdentifier")
+  set(CORSIXTH_IOS_SHORT_VERSION "0.70" CACHE STRING "iOS CFBundleShortVersionString")
+  set(CORSIXTH_IOS_BUNDLE_VERSION "1" CACHE STRING "iOS CFBundleVersion")
+endif()
+
 # Declaration of the executable
-if(APPLE)
+if(IOS)
+  # CorsixTH-iOS @build 2026-09-06 iOS app bundle: no .icns, no Frameworks rpath, and an
+  # Info.plist carrying the iOS-only keys (device family, orientations, launch screen).
+  add_executable(CorsixTH MACOSX_BUNDLE)
+  set_target_properties(
+    CorsixTH
+    PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/CMake/ios/Info.plist.in
+               MACOSX_BUNDLE_BUNDLE_NAME "CorsixTH"
+               MACOSX_BUNDLE_GUI_IDENTIFIER "${CORSIXTH_IOS_BUNDLE_ID}"
+               MACOSX_BUNDLE_SHORT_VERSION_STRING "${CORSIXTH_IOS_SHORT_VERSION}"
+               MACOSX_BUNDLE_BUNDLE_VERSION "${CORSIXTH_IOS_BUNDLE_VERSION}"
+               XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${CORSIXTH_IOS_BUNDLE_ID}"
+               XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+               XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+               XCODE_ATTRIBUTE_ENABLE_BITCODE "NO"
+  )
+elseif(APPLE)
   set(corsixth_icon_file ${CMAKE_SOURCE_DIR}/CorsixTH/Icon.icns)
   set_source_files_properties(${corsixth_icon_file} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
   set(MACOSX_BUNDLE_ICON_FILE Icon.icns)
@@ -67,6 +96,9 @@ endif()
 # Report operating system in compile_opts.os
 if(WIN32)
   set(CORSIX_TH_OS "windows")
+elseif(IOS)
+  # CorsixTH-iOS @build 2026-09-06 iOS is not macOS; compile_opts.os must not lie.
+  set(CORSIX_TH_OS "ios")
 elseif(APPLE)
   set(CORSIX_TH_OS "macos")
 else()
@@ -97,6 +129,11 @@ if(SEARCH_LOCAL_DATADIRS)
   target_link_libraries(CorsixTH_lib PRIVATE WhereamiLib)
 endif()
 target_link_libraries(CorsixTH PRIVATE CorsixTH_lib)
+
+if(IOS)
+  # CorsixTH-iOS @build 2026-09-06 platform guard for iOS-only code (global constraint 2).
+  target_compile_definitions(CorsixTH_lib PUBLIC CORSIX_TH_IOS)
+endif()
 
 if(UNIX AND NOT APPLE)
   set_target_properties(CorsixTH PROPERTIES OUTPUT_NAME corsix-th)
@@ -276,15 +313,31 @@ if(WITH_MIDI_DEVICE)
 endif()
 
 if(FETCH_SOUNDFONT)
-  FetchContent_Declare(
-    FluidR3
-    URL https://raw.githubusercontent.com/Jacalz/fluid-soundfont/master/SF3/FluidR3.sf3
-    URL_HASH SHA256=32039e039c2f708467a6f171fbfd9fecdcadfe40a2327837c391490c8de70021
-    DOWNLOAD_NO_EXTRACT TRUE
-  )
+  if(IOS)
+    # CorsixTH-iOS @build 2026-09-06 the iOS fluidsynth is built without libsndfile, so
+    # SF3's Ogg-compressed samples cannot be decoded. Fetch an uncompressed SF2 instead.
+    # GeneralUser GS v2.0.3, 30.8 MB, GeneralUser GS License v2.0 (redistributable in
+    # software products); see docs/port/IOS_AUDIO.md for provenance.
+    FetchContent_Declare(
+      GeneralUserGS
+      URL https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/684543d5e5efaef08d02be50dcda8d552478fa60/GeneralUser-GS.sf2
+      URL_HASH SHA256=9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe
+      DOWNLOAD_NO_EXTRACT TRUE
+    )
 
-  FetchContent_MakeAvailable(FluidR3)
-  set(FLUIDR3_FILE ${fluidr3_SOURCE_DIR}/FluidR3.sf3)
+    FetchContent_MakeAvailable(GeneralUserGS)
+    set(SOUNDFONT_FILE ${generalusergs_SOURCE_DIR}/GeneralUser-GS.sf2)
+  else()
+    FetchContent_Declare(
+      FluidR3
+      URL https://raw.githubusercontent.com/Jacalz/fluid-soundfont/master/SF3/FluidR3.sf3
+      URL_HASH SHA256=32039e039c2f708467a6f171fbfd9fecdcadfe40a2327837c391490c8de70021
+      DOWNLOAD_NO_EXTRACT TRUE
+    )
+
+    FetchContent_MakeAvailable(FluidR3)
+    set(SOUNDFONT_FILE ${fluidr3_SOURCE_DIR}/FluidR3.sf3)
+  endif()
 endif()
 
 if(FETCH_UNICODE_FONT)
@@ -394,8 +447,14 @@ if(NOT USE_SOURCE_DATADIRS)
   install(DIRECTORY Bitmap DESTINATION ${CORSIX_TH_DATADIR} FILES_MATCHING REGEX ".*\\.(tab|pal|dat|png|pl8)$")
   install(FILES CorsixTH.lua ../LICENSE.txt DESTINATION ${CORSIX_TH_DATADIR})
 
+  if(IOS)
+    # CorsixTH-iOS @build 2026-09-06 Graphics/file_mapping.txt backs the custom graphics
+    # folder; on iOS the bundle is the only read-only tree the game ever sees.
+    install(DIRECTORY Graphics DESTINATION ${CORSIX_TH_DATADIR})
+  endif()
+
   if(FETCH_SOUNDFONT)
-    install(FILES ${FLUIDR3_FILE} DESTINATION ${CORSIX_TH_DATADIR})
+    install(FILES ${SOUNDFONT_FILE} DESTINATION ${CORSIX_TH_DATADIR})
   endif()
   if(FETCH_UNICODE_FONT)
     install(FILES ${GONOTO_FILE} DESTINATION ${CORSIX_TH_DATADIR})
@@ -412,7 +471,9 @@ if(NOT USE_SOURCE_DATADIRS)
     )
   endif()
 
-  if(APPLE)
+  # CorsixTH-iOS @build 2026-09-06 iOS links everything statically and BundleUtilities is
+  # macOS-only, so the fixup step is skipped there.
+  if(APPLE AND NOT IOS)
     # Fix the macOS bundle to include required libraries (create a redistributable app)
     install(
       CODE

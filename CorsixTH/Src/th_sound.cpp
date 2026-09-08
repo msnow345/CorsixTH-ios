@@ -30,12 +30,18 @@ SOFTWARE.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <new>
 #include <stdexcept>
 
 #include "th.h"
+
+#ifdef CORSIX_TH_IOS
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 
 namespace th::sound {
 static mixer_ptr mixer{};
@@ -80,9 +86,138 @@ MIX_Track* sdl_mixer::get_music_track() const { return music_track; }
 
 MIX_Mixer* sdl_mixer::get_mixer() const { return mixer; }
 
+namespace {
+
+// CorsixTH-iOS @feature 2026-09-06 final-output level meter. Audio faults on a
+// mobile device are usually "it plays, but silently" (wrong audio session
+// category, no soundfont, a suspended device); a periodic peak/RMS reading of
+// the mixed output is what distinguishes that from working audio when you
+// cannot listen to the hardware.
+void level_meter_postmix(void*, MIX_Mixer*, const SDL_AudioSpec* spec,
+                         float* pcm, int samples) {
+  static float peak = 0.0f;
+  static double square_sum = 0.0;
+  static uint64_t frames = 0;
+
+  for (int i = 0; i < samples; ++i) {
+    const float v = pcm[i];
+    const float a = v < 0.0f ? -v : v;
+    if (a > peak) {
+      peak = a;
+    }
+    square_sum += static_cast<double>(v) * v;
+  }
+  frames +=
+      static_cast<uint64_t>(samples) / (spec->channels ? spec->channels : 1);
+
+  const uint64_t report_every = static_cast<uint64_t>(spec->freq);
+  if (frames >= report_every && report_every > 0) {
+    const double rms =
+        std::sqrt(square_sum / static_cast<double>(frames * spec->channels));
+    std::printf("audio level: peak=%.4f rms=%.5f (%s)\n",
+                static_cast<double>(peak), rms,
+                rms > 0.0001 ? "SOUND" : "silence");
+    std::fflush(stdout);
+    peak = 0.0f;
+    square_sum = 0.0;
+    frames = 0;
+  }
+}
+
+}  // namespace
+
+void enable_level_meter_if_requested() {
+  if (!mixer || !SDL_GetHintBoolean("CORSIXTH_AUDIO_LEVEL_METER", false)) {
+    return;
+  }
+  SDL_AudioSpec spec{};
+  if (MIX_GetMixerFormat(mixer->get_mixer(), &spec)) {
+    std::printf("audio device format: %d Hz, %d channels\n", spec.freq,
+                spec.channels);
+    std::fflush(stdout);
+  }
+  if (!MIX_SetPostMixCallback(mixer->get_mixer(), level_meter_postmix,
+                              nullptr)) {
+    std::fprintf(stderr, "Unable to install the audio level meter: %s\n",
+                 SDL_GetError());
+  }
+}
+
+#ifdef CORSIX_TH_IOS
+// CorsixTH-iOS @feature 2026-09-06 report the AVAudioSession category that is
+// actually in effect once SDL has opened the device.
+// "AVAudioSessionCategoryPlayback" is the only value that keeps the game
+// audible with the hardware mute switch on; "Ambient" or "SoloAmbient" means
+// SDL_HINT_AUDIO_CATEGORY did not take. Read through the Objective-C runtime so
+// this stays a plain C++ translation unit.
+void log_ios_audio_session_category() {
+  Class session_class = objc_getClass("AVAudioSession");
+  if (session_class == nullptr) {
+    std::fprintf(stderr, "AVAudioSession is unavailable.\n");
+    return;
+  }
+  using id_from_class = id (*)(Class, SEL);
+  using id_from_id = id (*)(id, SEL);
+  using cstr_from_id = const char* (*)(id, SEL);
+
+  id session = reinterpret_cast<id_from_class>(objc_msgSend)(
+      session_class, sel_registerName("sharedInstance"));
+  if (session == nullptr) {
+    std::fprintf(stderr, "AVAudioSession sharedInstance is nil.\n");
+    return;
+  }
+  id category = reinterpret_cast<id_from_id>(objc_msgSend)(
+      session, sel_registerName("category"));
+  const char* name = category == nullptr
+                         ? nullptr
+                         : reinterpret_cast<cstr_from_id>(objc_msgSend)(
+                               category, sel_registerName("UTF8String"));
+  std::printf("iOS audio session category: %s\n",
+              name != nullptr ? name : "(unknown)");
+  std::fflush(stdout);
+}
+
+//! The mixer's playback device, or 0 if there is no mixer.
+SDL_AudioDeviceID mixer_device() {
+  if (!mixer) {
+    return 0;
+  }
+  return static_cast<SDL_AudioDeviceID>(
+      SDL_GetNumberProperty(MIX_GetMixerProperties(mixer->get_mixer()),
+                            MIX_PROP_MIXER_DEVICE_NUMBER, 0));
+}
+
+void resume_audio_device() {
+  const SDL_AudioDeviceID device = mixer_device();
+  if (device != 0 && SDL_AudioDevicePaused(device)) {
+    std::printf("Audio device was suspended; resuming it.\n");
+    std::fflush(stdout);
+    SDL_ResumeAudioDevice(device);
+  }
+}
+
+// CorsixTH-iOS @feature 2026-09-08 stop the mixer for the length of a
+// suspension. Everything the game plays -- effects, speech and the MIDI music,
+// which is synthesised into this same mixer -- comes from this one device, so
+// pausing it is the whole of "pause audio on background", and the music resumes
+// from where it stopped rather than restarting.
+void pause_audio_device() {
+  const SDL_AudioDeviceID device = mixer_device();
+  if (device != 0 && !SDL_AudioDevicePaused(device)) {
+    std::printf("Pausing the audio device for backgrounding.\n");
+    std::fflush(stdout);
+    SDL_PauseAudioDevice(device);
+  }
+}
+#endif
+
 bool init() {
   try {
     mixer = std::make_unique<sdl_mixer>();
+#ifdef CORSIX_TH_IOS
+    log_ios_audio_session_category();
+#endif
+    enable_level_meter_if_requested();
     return true;
   } catch (const std::exception& ex) {
     std::fprintf(stderr, "Failed to initialize mixer: %s", ex.what());

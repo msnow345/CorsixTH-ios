@@ -1,10 +1,16 @@
 {
   "dependencies": [
     {
+      "$comment": "CorsixTH-iOS @build 2026-09-06 the lua[tools] feature (lua/luac executables) is declared unsupported on iOS and is not needed there.",
       "name": "lua",
       "features": [
         "tools"
-      ]
+      ],
+      "platform": "!ios"
+    },
+    {
+      "name": "lua",
+      "platform": "ios"
     },
     "sdl3",
     "luafilesystem",
@@ -12,10 +18,16 @@
     "libpng",
     "zlib",
     {
+       "$comment": "CorsixTH-iOS @build 2026-09-06 sndfile needs libsndfile[external-libs] -> mp3lame, whose autotools configure cannot cross-compile to iOS (vcpkg-make sets --build == --host). iOS only needs SF2 playback, which fluidsynth core provides.",
        "name": "fluidsynth",
        "features": [
          "sndfile"
-       ]
+       ],
+       "platform": "!ios"
+    },
+    {
+       "name": "fluidsynth",
+       "platform": "ios"
     },
     {
       "name": "sdl3-mixer",

@@ -43,6 +43,63 @@ local shake_screen_max_movement = 50 --pixels
 -- This scroll speed is further adjusted by the configured scroll_speed
 local key_scroll_speed = 10
 
+-- CorsixTH-iOS @feature 2026-09-07 true on a build whose only pointer is a
+-- finger. File-local, because the UI is persisted into savegames and where the
+-- game is being played is not a property of the save.
+local touch_input = TH.GetCompileOptions().os == "ios"
+
+-- ---------------------------------------------------------------------------
+-- CorsixTH-iOS @feature 2026-09-07 THE ONE-FINGER PAN SWITCH.
+--
+-- Does a one-finger drag across open map move the camera?
+--
+--   true  -- one finger pans outside placement modes, two fingers pan in every
+--            mode. Placement modes still take the one finger for themselves,
+--            so this never applies while something is being carried or sized.
+--   false -- one finger never moves the camera anywhere. A drag on open map is
+--            inert: it emits nothing while it moves and nothing when it lifts.
+--            Two fingers become the only way to move the view.
+--
+-- Both models are fully implemented and this line chooses between them; there
+-- is deliberately no settings-screen option, because this is a question about
+-- which one feels right rather than a preference to be configured. Flipping it
+-- is the whole change: GameUI:onTouchDragQuery below is the only reader, and
+-- the recogniser in sdl_core.cpp already has a phase for each answer
+-- (drag_pan / drag_none).
+local touch_one_finger_pan = true
+-- ---------------------------------------------------------------------------
+
+-- Deceleration of a released touch flick, per millisecond. This is
+-- UIScrollView's normal rate, which is what makes a coast read as native rather
+-- than merely damped. It deliberately does not use scrolling_momentum: that is
+-- 0.8 per 18 ms tick, about 0.988 per millisecond, which spends a flick in a
+-- tenth of a second.
+local touch_glide_decay_per_ms = 0.998
+-- Screen pixels per millisecond. The arming speed sits marginally above the
+-- stopping speed, so arming a coast always buys at least one real step and
+-- there is no threshold cliff between "drifted to a stop" and "flicked".
+local touch_min_flick_speed = 0.06
+local touch_min_glide_speed = 0.05
+
+-- Exponent applied to the pinch ratio before it reaches setZoom. 1 is pure
+-- direct manipulation: the zoom changes exactly as much as the fingers
+-- separated, so the ground between them stays between them. Raise it for a
+-- longer throw, lower it for a shorter one.
+--
+-- 1 was measured, not guessed. Until this build a pinch zoomed twice -- once
+-- here and once again through SDL's own UIPinchGestureRecognizer feeding
+-- current_momentum.z -- and the user liked how that felt, so removing the
+-- duplicate must not shorten the throw. Simulating both paths at 120 fps with
+-- this device's 2421 px render width: the second path contributed nothing at
+-- all below about 300 ms of pinch, because its accumulator never reached the
+-- 0.2 gate in GameUI:onFrame, and at most 4.1% extra zoom for the fastest
+-- pinches (2x in 250 ms: 2.048 combined against 2.000 direct). The exponent
+-- that would reproduce the old combined throw is therefore between 1.000 and
+-- 1.052, mean 1.015 -- a difference of about 2% of final zoom on a 2x pinch,
+-- which is well below what anyone can perceive. 1 is both correct and
+-- indistinguishable, so the throw is kept and only the drift is lost.
+local touch_pinch_zoom_gain = 1.0
+
 --! Game UI constructor.
 --!param app (Application) Application object.
 --!param local_hospital Hospital to display
@@ -99,6 +156,9 @@ function GameUI:GameUI(app, local_hospital, map_editor)
 
   self.momentum = app.config.scrolling_momentum
   self.current_momentum = {x = 0.0, y = 0.0, z = 0.0}
+  -- Sub-unit camera movement left over from the previous rendered frame.
+  self.scroll_residual_x = 0.0
+  self.scroll_residual_y = 0.0
 
   self.recallpositions = {}
 
@@ -220,7 +280,15 @@ function GameUI:calculateMinimumZoom()
   return factor
 end
 
-function GameUI:setZoom(factor, follow_cursor)
+--! Set the zoom level, keeping one screen point fixed under the new zoom.
+--!param factor (number) The new zoom factor.
+--!param follow_cursor (boolean) Anchor on the cursor rather than the screen
+-- centre. Ignored when an explicit anchor is given.
+--!param anchor_x (number, optional) Screen x to hold fixed.
+--!param anchor_y (number, optional) Screen y to hold fixed. Both must be given
+-- for the anchor to be used; a pinch passes the point between the fingers here.
+--!return (boolean) Whether the zoom was applied.
+function GameUI:setZoom(factor, follow_cursor, anchor_x, anchor_y)
   if factor <= 0 then
     return false
   end
@@ -237,7 +305,14 @@ function GameUI:setZoom(factor, follow_cursor)
   end
 
   self.visible_diamond = new_diamond
-  local refx, refy = follow_cursor and self.cursor_x or scr_w / 2, follow_cursor and self.cursor_y or scr_h / 2
+  local refx, refy
+  if anchor_x and anchor_y then
+    refx, refy = anchor_x, anchor_y
+  elseif follow_cursor then
+    refx, refy = self.cursor_x, self.cursor_y
+  else
+    refx, refy = scr_w / 2, scr_h / 2
+  end
   local cx, cy = self:ScreenToWorld(refx, refy)
   self.zoom_factor = factor
 
@@ -268,7 +343,9 @@ function GameUI:draw(canvas)
   end
   Window.draw(self, canvas, 0, 0) -- NB: not calling UI.draw on purpose
   self:drawTooltip(canvas)
-  if self.simulated_cursor then
+  -- CorsixTH-iOS @feature 2026-09-07 no pointer, so nothing to draw a pointer
+  -- for. See UI:draw.
+  if self.simulated_cursor and not touch_input then
     self.simulated_cursor.draw(canvas, self.cursor_x, self.cursor_y)
   end
 end
@@ -613,7 +690,12 @@ function GameUI:onMouseMove(x, y, dx, dy)
   end
 
   local scroll_region_size
-  if self.app.config.fullscreen then
+  if touch_input then
+    -- CorsixTH-iOS @feature 2026-09-07 a one-pixel band cannot be hit with a
+    -- finger. This band is only ever live during a placement (see
+    -- _edgeScrollAllowed), where it is the only way to reach past the edge.
+    scroll_region_size = 24 * TheApp.gfx:getUIScale()
+  elseif self.app.config.fullscreen then
     -- As the mouse is locked within the window, a 1px region feels a lot
     -- larger than it actually is.
     scroll_region_size = 1
@@ -622,7 +704,7 @@ function GameUI:onMouseMove(x, y, dx, dy)
     scroll_region_size = 8
   end
   local scr_w, scr_h = TheApp.video:getRenderSize()
-  if not self.app.config.prevent_edge_scrolling and
+  if not self.app.config.prevent_edge_scrolling and self:_edgeScrollAllowed() and
       (x < scroll_region_size or y < scroll_region_size or
        x >= scr_w - scroll_region_size or
        y >= scr_h - scroll_region_size) then
@@ -676,7 +758,27 @@ function GameUI:onMouseMove(x, y, dx, dy)
   return repaint
 end
 
+--! Should the pointer near a screen edge scroll the map?
+--! CorsixTH-iOS @feature 2026-09-07: with touch this is an active hazard
+--! everywhere except a placement. A drag that ends near an edge would pan
+--! directly and edge-scroll as well, compounding into a lurch, and there is no
+--! hover afterwards to move the pointer back out of the band and stop it. It is
+--! still wanted while sizing or placing something, where the one finger is
+--! already busy and cannot pan as well.
+--!return (boolean) Whether edge scrolling may engage.
+function GameUI:_edgeScrollAllowed()
+  if not touch_input then
+    return true
+  end
+  return self:_activePlacement() ~= nil
+end
+
 function GameUI:onMouseUp(code, x, y)
+  if touch_input then
+    -- The pointer stops dead where the finger lifted, so an edge scroll armed
+    -- by the last motion of a drag would never see it leave the band.
+    self.tick_scroll_amount_mouse = false
+  end
   if self.app.moviePlayer.playing then
     return UI.onMouseUp(self, code, x, y)
   end
@@ -762,6 +864,25 @@ end
 --!param scale (number) The scale change since the last SDL_EVENT_PINCH_UPDATE.
 --!                     Scale < 1 is "zoom out". Scale > 1 is "zoom in"
 function GameUI:onPinchUpdate(scale)
+  if touch_input then
+    -- CorsixTH-iOS @bugfix 2026-09-07 SDL's iOS backend runs a
+    -- UIPinchGestureRecognizer with cancelsTouchesInView = NO, so a pinch
+    -- arrives here *as well as* through the finger events the touch layer is
+    -- already tracking. Left alone, every pinch zoomed twice: once directly and
+    -- anchored between the fingers, and again through this accumulator, applied
+    -- a tick later, unanchored, and still drifting for several ticks after the
+    -- fingers lift. Only the direct path may zoom.
+    --
+    -- KNOWN LIMITATION, and a blocker for upstreaming this file as-is: the gate
+    -- is the platform, not the gesture, so it also silences a genuine trackpad
+    -- pinch on an iPad -- which sends no finger events and so has no other zoom
+    -- path left. Accepted deliberately because this user does not use a
+    -- trackpad. The fix is to suppress the accumulator only while our own touch
+    -- recogniser has a gesture in progress: touch_catch and touch_gesture_end
+    -- already bracket exactly that interval. See docs/port/IOS_PORT_NOTES.md.
+    self.current_momentum.z = 0
+    return true
+  end
   self.current_momentum.z = self.current_momentum.z + (scale - 1) * pinch_zoom_sensitivity
   return true
 end
@@ -770,6 +891,135 @@ end
 --!
 --!return (boolean) event processed indicator
 function GameUI:onPinchEnd()
+end
+
+--! A finger landed on the glass: catch whatever the camera was still doing,
+--! the way touching a coasting iOS scroll view stops it.
+--! CorsixTH-iOS @feature 2026-09-07 catch a coasting camera.
+--!return (boolean) event processed indicator
+function GameUI:onTouchCatch()
+  self.current_momentum.x = 0.0
+  self.current_momentum.y = 0.0
+  self.current_momentum.z = 0.0
+  self.touch_glide = nil
+  self:_stopTouchEdgeScroll()
+  return false
+end
+
+--! CorsixTH-iOS @bugfix 2026-09-07 the gesture ended, however it ended.
+--! Reported for cancellations too -- an incoming call, a Control Centre swipe,
+--! palm rejection -- which is the case _stopTouchEdgeScroll's other callers
+--! miss: a carry that is cancelled rather than lifted emits no click and no
+--! fling, so nothing else would ever run. A cancelled carry must place nothing,
+--! but it must not leave the camera running either.
+--!return (boolean) event processed indicator
+function GameUI:onTouchGestureEnd()
+  self.touch_gesture_active = false
+  self:_stopTouchEdgeScroll()
+  return false
+end
+
+--! Disarm edge scrolling.
+--! CorsixTH-iOS @bugfix 2026-09-07 edge scrolling is armed by a mouse move into
+--! the band and disarmed by one out of it. A finger leaving the glass produces
+--! neither, so an edge scroll armed while carrying something to the edge stayed
+--! armed after the fingers lifted and scrolled the map for ever. onMouseUp
+--! covers the gestures that end in a click; these are the ones that do not --
+--! every two-finger gesture, and every drag that was not a press.
+function GameUI:_stopTouchEdgeScroll()
+  if touch_input then
+    self.tick_scroll_amount_mouse = false
+  end
+end
+
+--! Direct-manipulation camera for touch.
+--! CorsixTH-iOS @feature 2026-09-07 pan and pinch, applied together.
+--!
+--! Pan and zoom arrive in the same message and are applied in the same frame,
+--! which is what lets a pinch start mid-drag without lifting a finger. The zoom
+--! is applied straight to the zoom factor rather than accumulated into
+--! current_momentum.z: that accumulator is applied a tick later and shaped by
+--! World:adjustZoom's zoom_speed factor and gaussian modifier, which exist to
+--! smooth discrete mouse-wheel clicks. A pinch is already a continuous ratio
+--! describing exactly the zoom the fingers asked for.
+--!
+--!param dx,dy (number) Movement of the finger, or of the two-finger centroid,
+-- in screen pixels since the previous message.
+--!param ratio (number) Change in finger separation, 1 when not pinching.
+--!param ax,ay (number) The screen point to hold still while zooming, which is
+-- the point between the fingers.
+--!return (boolean) event processed indicator
+function GameUI:onTouchCamera(dx, dy, ratio, ax, ay)
+  self.touch_gesture_active = true
+  -- CorsixTH-iOS @bugfix 2026-09-07 the camera is now driven directly by the
+  -- fingers, so any edge scroll armed before this must stop. Carrying an object
+  -- into the edge band arms one, and a second finger landing on top of that
+  -- carry hands the camera over here while the carrying finger stops emitting
+  -- motion -- leaving the latched edge scroll to move the map at the same time
+  -- as the pan, at roughly double rate, until every finger lifts.
+  self:_stopTouchEdgeScroll()
+  if ratio ~= 1 then
+    -- Applied as an exponent rather than a multiplier so the response stays
+    -- multiplicative: pinching in and back out returns to the same zoom
+    -- instead of drifting.
+    self:setZoom(self.zoom_factor * ratio ^ touch_pinch_zoom_gain, false, ax, ay)
+  end
+  if dx ~= 0 or dy ~= 0 then
+    -- The camera moves opposite the finger: the ground stays under the finger.
+    local zoom = self:getEffectiveZoom()
+    self:_scrollMapFractional(-dx / zoom, -dy / zoom)
+  end
+  return true
+end
+
+--! The fingers left the glass. Everything up to this point was direct
+--! manipulation; momentum exists only for the release.
+--! CorsixTH-iOS @feature 2026-09-07 release flick.
+--!param vx,vy (number) Release velocity in screen pixels per millisecond,
+-- measured by the platform layer over a real time window rather than filtered
+-- per frame, because people ease off as they lift.
+--!return (boolean) event processed indicator
+function GameUI:onTouchFling(vx, vy)
+  self.touch_gesture_active = false
+  self:_stopTouchEdgeScroll()
+  if (vx * vx + vy * vy) ^ 0.5 < touch_min_flick_speed then
+    self.touch_glide = nil
+    return false
+  end
+  self.touch_glide = {x = -vx, y = -vy}
+  return true
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 advance a released touch flick.
+--! Velocity is in screen pixels per
+--! millisecond and the decay is applied per millisecond, so the coast is
+--! identical at any frame rate.
+--!param dt (number) Milliseconds since the previous rendered frame.
+--!return (boolean) Whether the camera is still coasting.
+function GameUI:_advanceTouchGlide(dt)
+  local glide = self.touch_glide
+  if not glide then
+    return false
+  end
+  local zoom = self:getEffectiveZoom()
+  local step_x, step_y = glide.x * dt / zoom, glide.y * dt / zoom
+  local before_x, before_y = self.screen_offset_x, self.screen_offset_y
+  self:_scrollMapFractional(step_x, step_y)
+
+  local decay = touch_glide_decay_per_ms ^ dt
+  glide.x, glide.y = glide.x * decay, glide.y * decay
+
+  -- Judge "pinned against the edge of the map" against the distance actually
+  -- asked for. A fixed threshold cannot tell a camera jammed against the map
+  -- edge from a frame so short that it asked the camera to move almost nothing.
+  local asked = (step_x * step_x + step_y * step_y) ^ 0.5
+  local moved_x, moved_y = self.screen_offset_x - before_x, self.screen_offset_y - before_y
+  local pinned = asked > 1 and (moved_x * moved_x + moved_y * moved_y) ^ 0.5 < asked * 0.25
+  if pinned or (glide.x * glide.x + glide.y * glide.y) ^ 0.5 < touch_min_glide_speed then
+    self.touch_glide = nil
+    return false
+  end
+  return true
 end
 
 function GameUI:onWindowDisplayScaleChanged(scale)
@@ -837,6 +1087,188 @@ function GameUI:playAnnouncement(name, priority, played_callback, played_callbac
   self.announcer:playAnnouncement(name, priority, played_callback, played_callback_delay)
 end
 
+--! CorsixTH-iOS @feature 2026-09-07 is something being positioned on the map?
+--! One rule for every placement flow: sizing a room, placing its door and
+--! windows, dropping an object, siting a member of staff. While any of them is
+--! live the one finger drives it and never moves the camera, whatever
+--! touch_one_finger_pan says; two fingers move the view instead, which is what
+--! they do everywhere else too.
+--!return (Window, boolean) The window doing the placing and whether it wants a
+--! held button rather than a carry, or nil.
+function GameUI:_activePlacement()
+  local place_objects = self:getWindow(UIPlaceObjects)
+  if place_objects then
+    -- Sizing the walls of a room is a press, drag and release on the map: the
+    -- rectangle is anchored where the press landed, so the button has to be
+    -- held for the whole gesture.
+    local phase = place_objects.phase
+    if phase == "walls" then
+      return place_objects, true
+    end
+    -- Siting the door and the windows are map placements too, just click-sized
+    -- ones, so the finger carries rather than presses.
+    if phase == "door" or phase == "windows" then
+      return place_objects, false
+    end
+    -- Otherwise nothing is in hand unless the dialog says so. place_objects is
+    -- false while it is being used to *choose* objects for a room being built,
+    -- and once the last object has been placed; treating those as a placement
+    -- would take the one finger away with nothing to give it to, which with
+    -- one-finger pan enabled reads as the map having stopped working.
+    if place_objects.place_objects then
+      return place_objects, false
+    end
+    return nil, false
+  end
+  local place_staff = self:getWindow(UIPlaceStaff)
+  if place_staff then
+    return place_staff, false
+  end
+  return nil, false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 decide what a one-finger drag means.
+--! Anything over a dialog is the
+--! dialog's, as elsewhere in the UI. On the map it belongs to whatever is being
+--! placed, if anything is; that test comes first, and is why a stray finger can
+--! never shift the map out from under a room being sized. With nothing being
+--! placed there is nothing for the finger to be busy with, so it pans -- or
+--! does nothing, if touch_one_finger_pan is off.
+--!param x,y (number) Where the finger first landed, in screen coordinates.
+--!return (integer) One of the UI.TOUCH_DRAG_* values.
+function GameUI:onTouchDragQuery(x, y)
+  local mode = UI.onTouchDragQuery(self, x, y)
+  if mode ~= UI.TOUCH_DRAG_NONE then
+    return mode
+  end
+  if self.drag_mouse_move then
+    return UI.TOUCH_DRAG_BUTTON
+  end
+  local placement, wants_button = self:_activePlacement()
+  if placement then
+    if wants_button then
+      return UI.TOUCH_DRAG_BUTTON
+    end
+    -- A picked-up person has no cancel button anywhere on screen; the only way
+    -- to put them back is the right click UIPlaceStaff:onMouseUp handles. Say
+    -- so, so the long press that produces it is not suppressed.
+    if class.is(placement, UIPlaceStaff) then
+      return UI.TOUCH_DRAG_CARRY_CANCELLABLE
+    end
+    return UI.TOUCH_DRAG_CARRY
+  end
+  return touch_one_finger_pan and UI.TOUCH_DRAG_CAMERA or UI.TOUCH_DRAG_NONE
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 second-finger tap while carrying: rotate.
+--! CorsixTH's
+--! orientations are discrete -- up to four -- so one tap is one step round
+--! them, which is the same shape as the ingame_rotateobject hotkey this stands
+--! in for. Where a placement has no orientation, staff being the case in point,
+--! this deliberately does nothing at all rather than falling through to a click.
+--!return (boolean) event processed indicator
+function GameUI:onTouchRotate()
+  local placement = self:_activePlacement()
+  if placement and placement.tryNextOrientation then
+    placement:tryNextOrientation()
+    return true
+  end
+  return false
+end
+
+--! Where should a long press deliver its right click?
+--!
+--! CorsixTH-iOS @bugfix 2026-09-07: at the point the finger pressed, patients
+--! and staff have walked away by the time the hold completes, so the click
+--! lands on bare floor. That is why picking someone up by long press kept
+--! failing, and why neither a shorter hold nor a double tap would fix it: both
+--! still aim at a coordinate the target has left.
+--!
+--! Aim at the entity instead. `cursor_entity` is the one the motion emitted at
+--! finger-down resolved -- the same lookup the game already uses for highlights
+--! and tooltips -- and no motion is emitted again while the press is merely
+--! being held, so it is still the thing that was pressed. Its drawn position is
+--! its tile plus the sub-tile offset it has walked into, which is what makes
+--! this track a walking target rather than snap between tiles.
+--!return (number, number) Screen position to click, or nil to use the press
+-- point.
+function GameUI:onTouchLongPressAnchor()
+  local entity = self.cursor_entity
+  if not entity or not entity.tile_x or not entity.th then
+    return nil
+  end
+  local x, y = self:WorldToScreen(entity.tile_x, entity.tile_y)
+  local ok, offset_x, offset_y = pcall(entity.th.getPosition, entity.th)
+  if ok and offset_x and offset_y then
+    local zoom = self:getEffectiveZoom()
+    x = x + offset_x * zoom
+    y = y + offset_y * zoom
+  end
+  return x, y
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 the staff member a double tap would pick
+--! up, if any. Staff are the only thing the engine can pick up: Staff:setPickup
+--! exists only on Staff, and Patient:onClick handles no button but "left".
+--!return (Staff) The entity, or nil.
+function GameUI:_pickableEntity()
+  if not self.app.world.user_actions_allowed then
+    return nil
+  end
+  if self:_activePlacement() then
+    return nil
+  end
+  local entity = self.cursor_entity
+  if entity and entity.setPickup and not entity.pickup and not entity.fired then
+    return entity
+  end
+  return nil
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 should this tap wait for a second one?
+--! Only where a double tap would actually do something, which is a member of
+--! staff and nothing else. Every other tap in the game -- buttons, rooms,
+--! patients, bare floor -- answers no and is delivered the instant the finger
+--! lifts.
+--!return (boolean) Whether to hold the tap back.
+function GameUI:onTouchDeferTap()
+  -- Remembered rather than resolved again on the second tap: the whole point is
+  -- to catch someone who is walking, and by the second tap they have moved off
+  -- the point the first one landed on.
+  self.touch_deferred_entity = self:_pickableEntity()
+  return self.touch_deferred_entity ~= nil
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 two quick taps on a member of staff pick
+--! them up. The 400 ms long press this replaces was losing races against people
+--! who walk; a double tap is quicker, and because setPickup takes the entity
+--! rather than a screen point, it cannot miss a moving target at all.
+--!
+--! Picking up establishes a mode that outlives the finger: setPickup queues a
+--! PickupAction which opens UIPlaceStaff, and from there the existing placement
+--! rules apply unchanged -- one finger carries, two fingers pan and zoom, edge
+--! scrolling engages. So the sequence is double tap, lift, then drag and
+--! release, with a two-finger pan anywhere in between.
+--!return (boolean) event processed indicator
+function GameUI:onTouchDoubleTap()
+  local entity = self.touch_deferred_entity
+  self.touch_deferred_entity = nil
+  if not entity or entity.pickup or entity.fired then
+    return false
+  end
+  if not self.app.world.user_actions_allowed then
+    return false
+  end
+  -- Close their dialog if it happens to be the one on screen, which is what
+  -- UIStaff's own pick-up button does.
+  local dialog = self:getWindow(UIStaff)
+  if dialog and dialog.staff ~= entity then
+    dialog = nil
+  end
+  entity:setPickup(self, dialog)
+  return true
+end
+
 --! Check whether the configured mouse drag button is being held down (true) or not (false).
 -- fixme: right mouse scrolling currently breaks other mouse operations (see issue 2469).
 function GameUI:_isMouseScrollButtonDown()
@@ -849,28 +1281,60 @@ function GameUI:_isMouseScrollButtonDown()
   return mouse_scroll_button_down
 end
 
-function GameUI:onTick()
-  local repaint = UI.onTick(self)
+--! Scroll the map by a possibly fractional amount, carrying the sub-unit
+--! remainder over to the next call.
+--! GameUI:scrollMap rounds the camera to a whole map-screen unit, so feeding it
+--! the small deltas produced at a high frame rate would quantise most of the
+--! movement away. Accumulating the remainder keeps the scroll speed correct at
+--! any frame rate and removes the visible stepping at native resolution.
+--!param dx (number) Horizontal amount to scroll by.
+--!param dy (number) Vertical amount to scroll by.
+function GameUI:_scrollMapFractional(dx, dy)
+  dx = dx + (self.scroll_residual_x or 0)
+  dy = dy + (self.scroll_residual_y or 0)
+  local old_x, old_y = self.screen_offset_x, self.screen_offset_y
+  self:scrollMap(dx, dy)
+  -- Clamped, because against the edge of the visible diamond the requested and
+  -- the applied movement can differ by an arbitrary amount.
+  local rx = dx - (self.screen_offset_x - old_x)
+  local ry = dy - (self.screen_offset_y - old_y)
+  self.scroll_residual_x = rx < -1 and -1 or (rx > 1 and 1 or rx)
+  self.scroll_residual_y = ry < -1 and -1 or (ry > 1 and 1 or ry)
+end
+
+--! Advance the camera. Called once per rendered frame, which may be far more
+--! often than the simulation tick, so every rate below is expressed per
+--! classic tick and scaled by the frame's elapsed time. At exactly one frame
+--! per tick this reduces to the behaviour it replaced.
+--!param dt (number) Milliseconds since the previous rendered frame.
+--!return (boolean) Whether the camera is still moving.
+function GameUI:onFrame(dt)
+  local ticks = dt / App.TICK_PERIOD_MS
+  local moving = false
+  local momentum = self.current_momentum
   if not self:_isMouseScrollButtonDown() then
-    if math.abs(self.current_momentum.x) < 0.2 and math.abs(self.current_momentum.y) < 0.2 then
+    local decay = self.momentum ^ ticks
+    if math.abs(momentum.x) < 0.2 and math.abs(momentum.y) < 0.2 then
       -- Stop scrolling
-      self.current_momentum.x = 0.0
-      self.current_momentum.y = 0.0
+      momentum.x = 0.0
+      momentum.y = 0.0
     else
-      self.current_momentum.x = self.current_momentum.x * self.momentum
-      self.current_momentum.y = self.current_momentum.y * self.momentum
-      self:scrollMap(self.current_momentum.x, self.current_momentum.y)
+      momentum.x = momentum.x * decay
+      momentum.y = momentum.y * decay
+      self:_scrollMapFractional(momentum.x * ticks, momentum.y * ticks)
+      moving = true
     end
-    if math.abs(self.current_momentum.z) > 0.2 then
-      self.app.world:adjustZoom(self.current_momentum.z)
+    if math.abs(momentum.z) > 0.2 then
+      self.app.world:adjustZoom(momentum.z * ticks)
+      moving = true
     end
-    self.current_momentum.z = self.current_momentum.z * self.momentum
+    momentum.z = momentum.z * decay
   end
   if self.tick_scroll_amount or self.tick_scroll_amount_mouse then
     -- The scroll amount per tick gradually increases as the duration of the
     -- scroll increases due to this multiplier.
     local mult = self.tick_scroll_mult
-    mult = mult + 0.02
+    mult = mult + 0.02 * ticks
     if mult > 2 then
       mult = 2
     end
@@ -907,11 +1371,26 @@ function GameUI:onTick()
       mult = mult * self.app.config.scroll_speed * 0.25
     end
 
-    self:scrollMap(dx * mult, dy * mult)
-    repaint = true
+    self:_scrollMapFractional(dx * mult * ticks, dy * mult * ticks)
+    moving = true
   else
     self.tick_scroll_mult = 1
   end
+  -- CorsixTH-iOS @feature 2026-09-07 touch camera, per rendered frame.
+  if self:_advanceTouchGlide(dt) then
+    moving = true
+  end
+  if self.touch_gesture_active then
+    -- Keep asking for frames while fingers are on the glass, so the camera is
+    -- redrawn at the panel rate rather than only when a touch event happens to
+    -- land.
+    moving = true
+  end
+  return moving
+end
+
+function GameUI:onTick()
+  local repaint = UI.onTick(self)
   if self:onCursorWorldPositionChange() then
     repaint = true
   end
@@ -1355,6 +1834,15 @@ end
 function GameUI:quit(mapeditor)
   local msg = mapeditor and _S.confirmation.quit_mapeditor or _S.confirmation.quit
   self:addWindow(UIConfirmDialog(self, false, msg, --[[persistable:gameui_confirm_quit]] function()
+    -- CorsixTH-iOS @bugfix 2026-09-08 this item says QUIT and, since UI.quit is
+    -- overridden here, has always meant "abandon this game and go back to the
+    -- main menu" rather than "close the program". On iOS it is now the only
+    -- leave-the-game control there is, so write an autosave before the world
+    -- goes away. Deliberately reads nothing but `self`: this closure is
+    -- persisted into savegames, and a new upvalue would change its shape.
+    if TheApp.ios and not self.map_editor and self.app.world then
+      pcall(self.app.world._executeAutosave, self.app.world)
+    end
     self.app:loadMainMenu()
     -- Release the mouse regardless of setting
     self.app.video:setCaptureMouse(false)

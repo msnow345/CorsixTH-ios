@@ -38,6 +38,11 @@ local App = _G["App"]
 App.MIN_WINDOW_WIDTH = 640
 App.MIN_WINDOW_HEIGHT = 480
 
+-- Period of the simulation tick in milliseconds. Must match
+-- usertick_period_ms in CorsixTH/Src/lua_sdl.h. Rates which were historically
+-- expressed per tick are scaled against this when applied per rendered frame.
+App.TICK_PERIOD_MS = 18
+
 function App:App()
   self.command_line = {}
   self.config = {}
@@ -68,12 +73,34 @@ function App:App()
     pinch_begin = self.onPinchBegin,
     pinch_update = self.onPinchUpdate,
     pinch_end = self.onPinchEnd,
+    -- CorsixTH-iOS @feature 2026-09-07 events produced by the iOS touch
+    -- recogniser. Taps, long presses and held drags arrive as ordinary mouse
+    -- events; only the camera gestures, which have no mouse equivalent that
+    -- tracks a finger 1:1, need handlers of their own.
+    touch_camera = self.onTouchCamera,
+    touch_fling = self.onTouchFling,
+    touch_catch = self.onTouchCatch,
+    touch_gesture_end = self.onTouchGestureEnd,
+    touch_double_tap = self.onTouchDoubleTap,
+    touch_defer_tap = self.onTouchDeferTap,
+    touch_hover_end = self.onTouchHoverEnd,
+    touch_drag_query = self.onTouchDragQuery,
+    touch_rotate = self.onTouchRotate,
+    touch_longpress_anchor = self.onTouchLongPressAnchor,
+    -- CorsixTH-iOS @feature 2026-09-08 iOS moves the app off screen and can
+    -- kill it while it is there without any further warning. These arrive from
+    -- the SDL application-lifecycle event watch, not from the event queue.
+    app_suspend = self.onSuspend,
+    app_resume = self.onResume,
   }
   self.strings = {}
   self.savegame_version = SAVEGAME_VERSION
   self.check_for_updates = TH.GetCompileOptions().update_check
   self.idle_tick = 0
   self.window_active_status = false -- whether window is in focus, set after App:init
+  -- CorsixTH-iOS @feature 2026-09-08 true on iOS/iPadOS. Read by the dialogs
+  -- that have to leave out a control the platform cannot honour.
+  self.ios = SDL.ios or false
 end
 
 function App:setCommandLine(...)
@@ -1169,7 +1196,11 @@ function App:fixConfig()
     elseif key == "player_name" then
       value = value:match('^%s*(.*%S)') or "" -- Trim spaces
       if value:len() == 0 then -- If empty, use computer user's name,
-        value = os.getenv("USER") or os.getenv("USERNAME")
+        -- CorsixTH-iOS @bugfix 2026-09-06 os.getenv("USER") and os.getenv("USERNAME")
+        -- can both be nil (e.g. a sandbox that sets neither), and the value:match()
+        -- below then indexes nil and crashes. The "" fallback keeps value a string
+        -- in every case; the "PLAYER" default a few lines down still applies.
+        value = os.getenv("USER") or os.getenv("USERNAME") or ""
       end
       value = value:match('^%s*(.*%S)') or ""
       if value:len() == 0 then -- unless that is also empty
@@ -1327,13 +1358,26 @@ for i = 1, 30 do fps_history[i] = 0 end
 local fps_sum = 0 -- Sum of fps_history array
 local fps_next = 1 -- Used to loop through fps_history when [over]writing
 
+--! Draw one frame.
+--! Everything which advances the simulation lives in App:onTick; this function
+--! renders, and additionally advances anything which should move at the
+--! rendered frame rate rather than at the fixed tick rate (the camera).
+--!return (boolean) Whether something is still animating and another frame
+-- should be drawn as soon as the display can show it.
 function App:drawFrame()
+  local animating = false
   self.video:startFrame()
   if (self.moviePlayer.playing) then
     self.key_modifiers = {}
     self.moviePlayer:refresh()
   else
     self.key_modifiers = SDL.getKeyModifiers()
+    local now = SDL.getTicks()
+    local dt = now - (self.last_frame_ticks or now)
+    self.last_frame_ticks = now
+    -- Clamp so that a stall (loading, backgrounding) cannot teleport the camera
+    if dt < 0 then dt = 0 elseif dt > 100 then dt = 100 end
+    animating = self.ui:onFrame(dt)
     self.ui:draw(self.video)
   end
   self.video:endFrame()
@@ -1344,6 +1388,8 @@ function App:drawFrame()
     fps_sum = fps_sum + fps_history[fps_next]
     fps_next = (fps_next % #fps_history) + 1
   end
+
+  return animating
 end
 
 function App:getFPS()
@@ -1388,6 +1434,39 @@ function App:onWindowActive(...)
   return self.ui:onWindowActive(...)
 end
 
+--! The app is about to leave the screen (iOS).
+--! Called from inside the UIApplicationDelegate callback, which is the last
+--! moment the app is guaranteed to be running: once it is in the background iOS
+--! can reclaim it for memory at any time and with no further notice. So this is
+--! the only chance to write anything down, and it has to be quick, because the
+--! time it takes is spent against the system's transition budget.
+--!return (boolean) false; nothing is drawn while suspended.
+function App:onSuspend()
+  self:saveConfig()
+  self:saveHotkeys()
+  -- Reuse the game's own autosave rather than inventing a save path: it writes
+  -- into Saves/Autosaves, which is where "Continue Game" looks, so a game lost
+  -- to a memory kill comes back from the main menu with one tap.
+  if self.world and not self.moviePlayer.playing then
+    local ok, err = pcall(self.world._executeAutosave, self.world)
+    if not ok then
+      print("Error while saving on suspend: " .. tostring(err))
+    end
+  end
+  return false
+end
+
+--! The app is back on screen (iOS).
+--!return (boolean) false; the next tick asks for the repaint.
+function App:onResume()
+  -- The frame delta is measured against the wall clock, so the whole of the
+  -- time spent in the background would otherwise arrive as one enormous dt.
+  -- App:drawFrame clamps it, but starting from nil is exact rather than merely
+  -- bounded, and it costs one comparison.
+  self.last_frame_ticks = nil
+  return false
+end
+
 --! Window has been resized by the user
 --! Call the UI to report the new window size
 function App:onWindowResized(...)
@@ -1429,7 +1508,7 @@ function App:onSoundOver(...)
 end
 
 function App:onPinchBegin(...)
-  return self.ui:onPinchUpdate(...)
+  return self.ui:onPinchBegin(...)
 end
 
 function App:onPinchUpdate(...)
@@ -1438,6 +1517,46 @@ end
 
 function App:onPinchEnd(...)
   return self.ui:onPinchEnd(...)
+end
+
+function App:onTouchCamera(...)
+  return self.ui:onTouchCamera(...)
+end
+
+function App:onTouchFling(...)
+  return self.ui:onTouchFling(...)
+end
+
+function App:onTouchCatch(...)
+  return self.ui:onTouchCatch(...)
+end
+
+function App:onTouchGestureEnd(...)
+  return self.ui:onTouchGestureEnd(...)
+end
+
+function App:onTouchDoubleTap(...)
+  return self.ui:onTouchDoubleTap(...)
+end
+
+function App:onTouchDeferTap(...)
+  return self.ui:onTouchDeferTap(...)
+end
+
+function App:onTouchHoverEnd(...)
+  return self.ui:onTouchHoverEnd(...)
+end
+
+function App:onTouchDragQuery(...)
+  return self.ui:onTouchDragQuery(...)
+end
+
+function App:onTouchRotate(...)
+  return self.ui:onTouchRotate(...)
+end
+
+function App:onTouchLongPressAnchor(...)
+  return self.ui:onTouchLongPressAnchor(...)
 end
 
 function App:isThemeHospitalPath(path)
@@ -1601,6 +1720,7 @@ function App:findSoundFont()
     self.config.soundfont or false,
     data_dir .. "FluidR3_GM.sf2",
     data_dir .. "FluidR3.sf3",
+    data_dir .. "GeneralUser-GS.sf2",
     "/usr/share/soundfonts/default.sf2", -- default linux
     "/usr/share/sounds/sf2/FluidR3_GM.sf2", -- debian based
     "/usr/share/soundfonts/FluidR3_GM.sf2" -- archlinux and others
@@ -1997,11 +2117,23 @@ function App:exit()
   -- Save config before exiting
   self:saveConfig()
   self:saveHotkeys()
+  -- CorsixTH-iOS @bugfix 2026-09-08 an iOS app must never quit itself. Doing so
+  -- left the app on screen with a dead render loop -- a frozen last frame the
+  -- player had to force close from the app switcher -- and terminating the
+  -- process outright is recorded by iOS as a crash. Apple's guidance is that an
+  -- app never offers a control that quits it; the player leaves with the home
+  -- gesture and the app is suspended, not closed. No iOS UI reaches this any
+  -- more (the main menu's Exit item is not built), so this is only a backstop
+  -- for a hotkey; the config has been saved, which is all it was for.
+  if self.ios then return end
   SDL.quit()
 end
 
 --! Exits the game completely without saving the config i.e. Alt+F4 for Quit Application
 function App:abandon()
+  -- CorsixTH-iOS @bugfix 2026-09-08 see App:exit. Alt+F4 from an attached
+  -- keyboard reaches this; on iOS it must not take the app down.
+  if self.ios then return end
   SDL.quit()
 end
 

@@ -51,8 +51,17 @@ function UIMainMenu:UIMainMenu(ui)
     {_S.main_menu.load_game,       self.buttonLoadGame,       _S.tooltip.main_menu.load_game},
     {_S.main_menu.options,         self.buttonOptions,        _S.tooltip.main_menu.options},
     {_S.main_menu.map_edit,        self.buttonMapEdit,        _S.tooltip.main_menu.map_edit},
-    {_S.main_menu.exit,            self.buttonExit,           _S.tooltip.main_menu.exit}
   }
+  -- CorsixTH-iOS @bugfix 2026-09-08 no Exit item on iOS. There is no working
+  -- "quit the application" on the platform and Apple's guidance is that an app
+  -- must not offer one -- the player leaves with the home gesture. Leaving the
+  -- item in gave a button that froze the last frame instead of closing
+  -- anything. Abandoning a game in progress is a different control and is
+  -- untouched: the in-game menu's QUIT item, which returns to this screen.
+  if not TheApp.ios then
+    menu_items[#menu_items + 1] =
+      {_S.main_menu.exit, self.buttonExit, _S.tooltip.main_menu.exit}
+  end
   self.no_menu_entries = #menu_items
 
   --! Work out the size of non-false items in array

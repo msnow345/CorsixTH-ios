@@ -18,11 +18,19 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE. --]]
 
+local TH = require("TH")
+
 --! The multi-purpose panel for launching dialogs / screens and dynamic information.
 class "UIBottomPanel" (Window)
 
 ---@type UIBottomPanel
 local UIBottomPanel = _G["UIBottomPanel"]
+
+-- CorsixTH-iOS @bugfix 2026-09-07 true where the only pointer is a finger.
+local touch_input = TH.GetCompileOptions().os == "ios"
+-- Matches the gesture log in sdl_core.cpp: which presses on this panel were
+-- spent revealing the hover-only buttons, and which went straight through.
+local touch_log = touch_input and os.getenv("CORSIXTH_TOUCH_LOG") ~= nil
 
 local MESSAGE_DOOR_FULLY_OPEN = 0
 local MESSAGE_DOOR_FULLY_SHUT = 22
@@ -387,6 +395,12 @@ function UIBottomPanel:setDynamicInfo(info)
 end
 
 function UIBottomPanel:onMouseMove(x, y, dx, dy)
+  -- CorsixTH-iOS @bugfix 2026-09-07 this window uses hover to reveal, and what
+  -- it is showing was deliberately opened by a tap. Releasing the touch hover
+  -- must not take it away again with the same lift that opened it.
+  if self.ui.touch_clearing_hover then
+    return false
+  end
   local repaint = Window.onMouseMove(self, x, y, dx, dy)
   if self:showAdditionalButtons(x, y) then
     repaint = true
@@ -401,14 +415,67 @@ function UIBottomPanel:showAdditionalButtons(x, y)
       for _, panel in ipairs(panels) do
         panel.visible = true
       end
+      -- CorsixTH-iOS @bugfix 2026-09-07 these buttons replace the dynamic info
+      -- bar on hover, and a finger has no hover. The tap's motion reveals them
+      -- and the tap's click would land on whichever one happened to appear
+      -- under the finger, before the user has seen what appeared. Remember that
+      -- they have only just been revealed, so the tap that revealed them can be
+      -- spent on doing exactly that: the next one selects.
+      --
+      -- Only presses in the region they occupy are spent that way. Hovering
+      -- anywhere on the panel reveals them, this end included, but the bank
+      -- button and the centre toolbar are permanently visible and a tap on
+      -- something already on screen must act on the first tap.
+      self.touch_awaiting_reveal = touch_input
     end
   else -- Outside the rectangle
     if panels[1].visible then -- Are the buttons already invisible?
       for _, panel in ipairs(panels) do
         panel.visible = false
       end
+      self.touch_awaiting_reveal = false
     end
   end
+end
+
+--! Is this point in the part of the panel that hover-reveals?
+--! CorsixTH-iOS @bugfix 2026-09-07 only the right-hand stretch of the panel
+--! swaps itself for buttons on hover; the bank button and the centre toolbar
+--! are permanently on screen. The region is derived from the revealed panels
+--! themselves rather than written down, so it cannot drift away from them --
+--! and it starts at the leftmost of them, which is the dynamic info bar they
+--! replace.
+function UIBottomPanel:_isInHoverRevealRegion(x, y)
+  if not self:hitTest(x, y) then
+    return false
+  end
+  local left
+  for _, panel in ipairs(self.additional_panels) do
+    if not left or panel.x < left then
+      left = panel.x
+    end
+  end
+  return left ~= nil and x >= left * TheApp.gfx:getUIScale()
+end
+
+function UIBottomPanel:onMouseDown(button, x, y)
+  -- Cleared on any press, wherever it landed: by the time a second one arrives
+  -- the buttons have been on screen for a frame and have been seen.
+  local awaiting = self.touch_awaiting_reveal
+  self.touch_awaiting_reveal = false
+  local in_region = self:_isInHoverRevealRegion(x, y)
+  if touch_log and button == "left" and self:hitTest(x, y) then
+    print(("[panel] press x=%.0f %s %s"):format(x,
+        in_region and "in reveal region" or "on an always-visible control",
+        (awaiting and in_region) and "-> spent revealing" or "-> passed through"))
+    io.stdout:flush()
+  end
+  if awaiting and button == "left" and in_region then
+    -- Swallow it. No button is armed, so the matching release does nothing
+    -- either, and the buttons are now visible to be aimed at properly.
+    return true
+  end
+  return Window.onMouseDown(self, button, x, y)
 end
 
 function UIBottomPanel:hitTest(x, y, x_offset)

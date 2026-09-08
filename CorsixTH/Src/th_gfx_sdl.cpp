@@ -204,14 +204,38 @@ class scoped_color_mod {
 void apply_letterbox(SDL_Renderer* renderer, bool apply_aspect_4_3) {
   // If not fullscreen we can assume a match and exit early
   SDL_SetRenderViewport(renderer, nullptr);
-  if (!apply_aspect_4_3) {
-    return;
-  }
 
   int w;
   int h;
   // Get the true render size (without any letterbox/logical voodoo)
   SDL_GetRenderOutputSize(renderer, &w, &h);
+  int origin_x = 0;
+  int origin_y = 0;
+
+#ifdef CORSIX_TH_IOS
+  // CorsixTH-iOS @feature 2026-09-06 the game renders full-bleed; only a
+  // *horizontal* safe-area inset is honoured. In the landscape-only
+  // orientations this app supports, the one obstruction that actually eats
+  // pixels is a display cutout (notch / Dynamic Island) on the leading or
+  // trailing edge. The vertical insets report the status bar and the home
+  // indicator, which are overlays Apple expects content to run underneath, so
+  // subtracting them would only cost screen area (it letterboxed the iPad,
+  // which has no cutout at all). SDL_RenderClear ignores the viewport so the
+  // cutout band is still cleared, and SDL_ConvertEventToRenderCoordinates
+  // accounts for the viewport, so input stays in the UI's coordinate space.
+  SDL_Rect safe_area;
+  if (SDL_GetRenderSafeArea(renderer, &safe_area) && safe_area.w > 0 &&
+      safe_area.x + safe_area.w <= w && safe_area.w < w) {
+    SDL_Rect cutout_area = {safe_area.x, 0, safe_area.w, h};
+    origin_x = cutout_area.x;
+    w = cutout_area.w;
+    SDL_SetRenderViewport(renderer, &cutout_area);
+  }
+#endif
+
+  if (!apply_aspect_4_3) {
+    return;
+  }
 
   float wf = static_cast<float>(w);
   float hf = static_cast<float>(h);
@@ -241,8 +265,8 @@ void apply_letterbox(SDL_Renderer* renderer, bool apply_aspect_4_3) {
     target_h = static_cast<int>(wf / target_ar);
   }
 
-  SDL_Rect viewport = {(w - target_w) / 2, (h - target_h) / 2, target_w,
-                       target_h};
+  SDL_Rect viewport = {origin_x + (w - target_w) / 2,
+                       origin_y + (h - target_h) / 2, target_w, target_h};
   SDL_SetRenderViewport(renderer, &viewport);
 }
 
@@ -496,6 +520,18 @@ render_target::render_target(const render_target_creation_params& params)
       aspect_ratio_4_3(params.aspect_ratio_4_3) {
   pixel_format = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_ABGR8888);
 
+#ifdef CORSIX_TH_IOS
+  // CorsixTH-iOS @feature 2026-09-06 an iOS app always owns the whole screen.
+  // Asking SDL for a fullscreen window is also what makes its UIKit view
+  // controller answer YES to -prefersStatusBarHidden (the clock/battery strip)
+  // and honour the home-indicator hint below; a windowed SDL window leaves
+  // both on screen and reports them as safe-area insets.
+  SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+  const bool want_fullscreen = true;
+#else
+  const bool want_fullscreen = params.fullscreen;
+#endif
+
   SDL_PropertiesID winProps = SDL_CreateProperties();
   SDL_SetStringProperty(winProps, SDL_PROP_WINDOW_CREATE_TITLE_STRING,
                         "CorsixTH");
@@ -507,7 +543,7 @@ render_target::render_target(const render_target_creation_params& params)
                         SDL_WINDOW_RESIZABLE);
   SDL_SetBooleanProperty(winProps, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
   SDL_SetBooleanProperty(winProps, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
-                         params.fullscreen);
+                         want_fullscreen);
   SDL_SetBooleanProperty(winProps, SDL_PROP_WINDOW_CREATE_MAXIMIZED_BOOLEAN,
                          params.maximized);
   SDL_SetBooleanProperty(winProps,
@@ -577,6 +613,13 @@ bool render_target::update(const render_target_creation_params& params) {
   this->aspect_ratio_4_3 = params.aspect_ratio_4_3;
   bool bIsFullscreen = ((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) ==
                         SDL_WINDOW_FULLSCREEN);
+#ifdef CORSIX_TH_IOS
+  // CorsixTH-iOS @feature 2026-09-06 the window is the screen; the settings
+  // dialog must not be able to shrink it or drop it out of fullscreen.
+  if (!bIsFullscreen) {
+    SDL_SetWindowFullscreen(window, true);
+  }
+#else
   if (bIsFullscreen != params.fullscreen) {
     SDL_SetWindowFullscreen(window, params.fullscreen);
   }
@@ -588,6 +631,7 @@ bool render_target::update(const render_target_creation_params& params) {
   }
 
   SDL_SetWindowSize(window, params.size.width, params.size.height);
+#endif
 
   int old_min_width;
   int old_min_height;

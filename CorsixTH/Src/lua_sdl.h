@@ -39,6 +39,10 @@ SOFTWARE.
 #define SDL_USEREVENT_MOVIE_OVER (SDL_EVENT_USER + 3)
 // SDL_USEREVENT_SOUND_OVER - informs script of a played sound finishing.
 #define SDL_USEREVENT_SOUND_OVER (SDL_EVENT_USER + 4)
+// CorsixTH-iOS @feature 2026-09-06 SDL_USEREVENT_FRAME - asks the main loop for
+// an extra rendered frame between simulation ticks, so the camera can be paced
+// at the panel refresh rate. Carries no simulation meaning.
+#define SDL_USEREVENT_FRAME (SDL_EVENT_USER + 5)
 
 constexpr int usertick_period_ms = 18;
 

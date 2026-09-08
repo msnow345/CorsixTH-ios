@@ -27,6 +27,15 @@ class "UI" (Window)
 local UI = _G["UI"]
 
 local TH = require("TH")
+
+-- CorsixTH-iOS @feature 2026-09-07 true on a build whose only pointer is a
+-- finger. Deliberately a file-local rather than a field on the UI object: the
+-- UI is persisted into savegames, and where the game is being played is not a
+-- property of the save.
+local touch_input = TH.GetCompileOptions().os == "ios"
+-- Matches the gesture log in sdl_core.cpp: which single window, if any, had its
+-- hover released when a tap lifted.
+local touch_log = touch_input and os.getenv("CORSIXTH_TOUCH_LOG") ~= nil
 local SDL = require("sdl")
 local WM = SDL.wm
 local lfs = require("lfs")
@@ -314,7 +323,10 @@ function UI:draw(canvas)
   end
   Window.draw(self, canvas, 0, 0)
   self:drawTooltip(canvas)
-  if self.simulated_cursor then
+  -- CorsixTH-iOS @feature 2026-09-07 the cursor sprite is a picture of a mouse
+  -- pointer. With touch there is no pointer to picture: it sits wherever the
+  -- last tap landed and reads as a stuck cursor.
+  if self.simulated_cursor and not touch_input then
     self.simulated_cursor.draw(canvas, self.cursor_x, self.cursor_y)
   end
 end
@@ -1063,10 +1075,216 @@ function UI:onPinchUpdate()
   return false
 end
 
+--! CorsixTH-iOS @feature 2026-09-07 does any window in this subtree respond to
+--! the mouse wheel? A drag inside one scrolls it rather than dragging it.
+local function wantsWheelScroll(window)
+  if window.scrollbars and #window.scrollbars > 0 then
+    return true
+  end
+  if window.onMouseWheel and window.onMouseWheel ~= Window.onMouseWheel then
+    return true
+  end
+  if window.windows then
+    for _, child in ipairs(window.windows) do
+      if wantsWheelScroll(child) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 find the topmost dialog under a point.
+--!param x,y (number) Screen position.
+--!return (Window, number, number) The window and the point in its own space,
+-- or nil when the point is not over any dialog.
+function UI:_windowAt(x, y)
+  if not self.windows then
+    return nil
+  end
+  for _, window in ipairs(self.windows) do
+    local s = window.apply_ui_scale and TheApp.gfx:getUIScale() or 1
+    local wx, wy = x - window.x * s, y - window.y * s
+    if window.visible ~= false and window:hitTest(wx, wy) then
+      return window, wx, wy
+    end
+  end
+  return nil
+end
+
+-- What a one-finger drag can mean. The recogniser in sdl_core.cpp owns gesture
+-- identity; only the game knows what a gesture means where it started.
+UI.TOUCH_DRAG_NONE = 0
+UI.TOUCH_DRAG_BUTTON = 1
+UI.TOUCH_DRAG_WHEEL = 2
+UI.TOUCH_DRAG_CARRY = 3
+UI.TOUCH_DRAG_CAMERA = 4
+-- A carry whose only way out is a right click, so the long press must survive.
+UI.TOUCH_DRAG_CARRY_CANCELLABLE = 5
+-- A control that previews while held and acts on release. Windows opt in with
+-- touch_hold_previews rather than being named here, so a second one costs a
+-- field rather than an edit to this file.
+UI.TOUCH_DRAG_PREVIEW = 6
+
+--! CorsixTH-iOS @feature 2026-09-07 decide what a one-finger drag here means.
+--! Called by the iOS touch layer the instant a press passes the drag dead zone
+--! and before any button has been committed, so the answer can still change
+--! what the gesture becomes.
+--!param x,y (number) Where the finger first landed, in screen coordinates.
+--!return (integer) One of the UI.TOUCH_DRAG_* values.
+function UI:onTouchDragQuery(x, y)
+  local window, wx, wy = self:_windowAt(x, y)
+  if not window then
+    return UI.TOUCH_DRAG_NONE
+  end
+  if window.touch_hold_previews then
+    return UI.TOUCH_DRAG_PREVIEW
+  end
+  if wantsWheelScroll(window) then
+    -- Unless the finger is on the scrollbar itself, in which case dragging the
+    -- thumb is exactly what was asked for.
+    for _, bar in ipairs(window.scrollbars or {}) do
+      if bar.enabled and window:hitTestPanel(wx, wy, bar.slider) then
+        return UI.TOUCH_DRAG_BUTTON
+      end
+    end
+    return UI.TOUCH_DRAG_WHEEL
+  end
+  return UI.TOUCH_DRAG_BUTTON
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 second-finger tap while placing: rotate.
+--! Nothing to rotate outside a game.
+function UI:onTouchRotate()
+  return false
+end
+
+--! CorsixTH-iOS @bugfix 2026-09-07 where a long press should deliver its click.
+--! Nothing outside a game walks away from where it was pressed, so the press
+--! point stands.
+function UI:onTouchLongPressAnchor()
+  return nil
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 direct-manipulation camera gesture.
+--! Only the in-game UI has a camera.
+function UI:onTouchCamera()
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 a camera gesture ended, fingers moving.
+function UI:onTouchFling()
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 a finger landed; catch a coasting camera.
+function UI:onTouchCatch()
+  return false
+end
+
+--! CorsixTH-iOS @bugfix 2026-09-07 the finger has lifted; release the hover.
+--!
+--! A tap sends a motion before its button-down, because CorsixTH's UI is
+--! hover-driven and a real mouse always moves before it clicks. But a finger
+--! never sends the motion that moves *away*, so that hover stayed applied and
+--! every button tapped was left looking hovered.
+--!
+--! Cleared by driving a dialog's own onMouseMove with a point outside it, which
+--! is the mechanism the game already uses to un-hover things, rather than by
+--! reaching into per-dialog hover fields that are all named differently.
+--!
+--! Driven for ONE window: the one under the release point. Broadcasting a
+--! phantom pointer position to every open window is not a safe version of this.
+--! Every hover-driven dialog computes its hover from whatever coordinate it is
+--! handed, so a made-up one lands inside somebody's hover band sooner or later
+--! and silently changes a selection in a dialog the user never touched --
+--! UIFurnishCorridor's band contains its own centre, so a screen-centre sweep
+--! moved its list selection, played its hover sound and swapped its preview on
+--! every unrelated tap. The dialogs that escaped did so by the luck of their
+--! geometry, which is not a guard.
+--!
+--! Scoping to the tapped window is also sufficient, not merely safer: the tap's
+--! own leading motion already ran every window's onMouseMove at the real press
+--! point, which cleared the hover of everything the finger was not on. The only
+--! window that can be left hovered is the one it was on.
+--!
+--! The point handed over is negative, which is outside every window's own local
+--! bounds and so fails every hover band without needing to know where any of
+--! them are. It also lands in Window.cursor_x, which three dialogs consult in
+--! onMouseWheel; harmless, because a wheel only ever arrives from a drag, and
+--! the touch layer emits a motion at the real position before each one.
+--!
+--! GameUI:onMouseMove is deliberately NOT called -- only the dialog is -- so
+--! this cannot re-resolve the world entity under the cursor, play a hover
+--! sound, or arm anything on the map from a position no finger is at.
+--!param x,y (number) Where the tap was released.
+--!return (boolean) Whether anything needs redrawing.
+function UI:onTouchHoverEnd(x, y)
+  local window = self:_windowAt(x, y)
+  self.tooltip = nil
+  self.tooltip_counter = nil
+  if touch_log then
+    print(("[hover] release at %.0f,%.0f -> %s"):format(x, y,
+        window and ("cleared " .. (class.type(window) or "?")) or "no window under it"))
+    io.stdout:flush()
+  end
+  if not window then
+    return false
+  end
+  -- Windows that use hover to *reveal* something check this and opt out: what
+  -- they are showing was deliberately opened and is not a highlight following a
+  -- finger that has gone.
+  -- The flag is cleared through a pcall so that a window whose onMouseMove
+  -- raises cannot leave it set: the event dispatcher catches the error and
+  -- carries on, and a latched flag would silently disable the bottom panel's
+  -- hover reveal and the menu bar for the rest of the session. The error is
+  -- re-raised so it still reaches the dispatcher exactly as before.
+  self.touch_clearing_hover = true
+  local ok, repaint = pcall(window.onMouseMove, window, -1, -1, 0, 0)
+  self.touch_clearing_hover = false
+  if not ok then
+    error(repaint, 0)
+  end
+  return repaint and true or false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 should this tap wait for a second one?
+--! Answered false by default, so a tap is delivered the instant the finger
+--! lifts. Only the specific things a double tap acts on ever say yes, which is
+--! what keeps the wait off every other tap in the game.
+function UI:onTouchDeferTap()
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 two taps in the same place, in quick
+--! succession. Nothing outside a game responds to one.
+function UI:onTouchDoubleTap()
+  return false
+end
+
+--! CorsixTH-iOS @feature 2026-09-07 the last finger left the glass.
+--! Reported for every gesture, including the ones that end without emitting
+--! anything at all, so state armed during the gesture can be released exactly
+--! once and cannot survive a cancellation.
+function UI:onTouchGestureEnd()
+  return false
+end
+
 --! Process SDL_PINCH_END events.
 --!
 --!return (boolean) event processed indicator
 function UI:onPinchEnd()
+  return false
+end
+
+--! Called once per rendered frame, before drawing, with the time since the
+--! previous frame. Unlike UI:onTick this is not a fixed-rate simulation step:
+--! it can run at the display refresh rate, so anything done here must be
+--! scaled by the elapsed time.
+--!param dt (number) Milliseconds since the previous rendered frame.
+--!return (boolean) Whether something is still animating and another frame
+-- should be drawn as soon as the display can show it.
+function UI:onFrame(dt) -- luacheck: ignore 212
   return false
 end
 
