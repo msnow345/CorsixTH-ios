@@ -1190,11 +1190,24 @@ end
 --! being held, so it is still the thing that was pressed. Its drawn position is
 --! its tile plus the sub-tile offset it has walked into, which is what makes
 --! this track a walking target rather than snap between tiles.
+--!
+--! CorsixTH-iOS @bugfix 2026-09-09 only for things that walk. The anchor is the
+--! animation's origin, and an origin is a point the sprite is drawn *around*,
+--! not one it is obliged to cover. The litter bin's two sprite elements sit at
+--! (-1,-17) 23x17 and (1,0) 18x15, leaving the origin in the gap between them,
+--! and the fire extinguisher's frame does not reach the origin at all -- so the
+--! re-aimed click could never hit either, and neither could ever be picked up.
+--! Nothing that stands still needs re-aiming in the first place: the press
+--! point is where `cursor_entity` was resolved from, so it is already known to
+--! hit, and moving off it can only lose.
 --!return (number, number) Screen position to click, or nil to use the press
 -- point.
 function GameUI:onTouchLongPressAnchor()
   local entity = self.cursor_entity
-  if not entity or not entity.tile_x or not entity.th then
+  if not entity or not class.is(entity, Humanoid) then
+    return nil
+  end
+  if not entity.tile_x or not entity.th then
     return nil
   end
   local x, y = self:WorldToScreen(entity.tile_x, entity.tile_y)
