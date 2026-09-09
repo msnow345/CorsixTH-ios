@@ -337,6 +337,8 @@ the second tap they have walked off the first tap's point. Only a tap on a picka
 is ever deferred — in one logged session 38 of 38 taps were delivered immediately — so nothing
 else in the game pays any latency for it.
 
+Applying the anchor to things that do *not* walk turned out to break two of them; see §2.24.
+
 ### 2.14 The Quit that froze the app was not either of the Quit menu items
 
 `GameUI:quit` overrides `UI:quit` and has never called `SDL.quit`; it puts up a confirmation and
@@ -465,6 +467,23 @@ phone rang.
   `os.getenv("USERNAME")` with no final default, so where neither is set the next `value:match()`
   indexes nil and the process dies with `signal 11`. Reproduced by simulating both env vars
   absent; the physical iPad happens to set `USER`, an iOS simulator does not.
+
+### 2.24 The long-press anchor made bins and fire extinguishers impossible to pick up
+
+The fix in §2.13 was applied to every long press, not only to the walking targets it was written
+for, and an animation's origin is a point the sprite is drawn *around* rather than one it is
+obliged to cover. Decompressing `VSTART/VFRA/VLIST/VELE-1.ANI` and walking the frame the way
+`animation_manager::hit_test` does settles it per object: the litter bin's idle animation (1752)
+draws two elements, at (-1,-17) 23×17 and (1,0) 18×15, and the origin falls in the **gap between
+them**; the fire extinguisher's frames do not reach the origin at all. So for those two the
+re-aimed right click could never land on the object — `emit_click`'s leading motion cleared
+`cursor_entity`, `Object:onClick` was never reached, and the hold did nothing whatsoever. The
+bench, plant, radiator, drinks machine and reception desk all cover their origin, which is why
+only two objects in the game were affected and it read as intermittent.
+
+`onTouchLongPressAnchor` now re-aims only for `Humanoid`s. Nothing that stands still needs it:
+the press point is the point `cursor_entity` was resolved from, so it is already known to hit,
+and moving off it can only lose.
 
 ---
 
