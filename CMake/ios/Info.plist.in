@@ -71,6 +71,18 @@
   <true/>
   <key>UIApplicationSupportsIndirectInputEvents</key>
   <true/>
+  <!-- CorsixTH asks for neither the camera nor Bluetooth, but SDL links both
+       APIs into every build -- its camera subsystem, and CoreBluetooth for
+       controller support -- and App Store Connect rejects an upload that
+       references them with no purpose string (ITMS-90683: the camera is an
+       error, Bluetooth a warning). The strings are what a prompt would show,
+       so they say plainly that the game does not use either. Building SDL with
+       SDL_CAMERA=OFF would drop the camera reference outright and is the
+       better fix if these are ever questioned. -->
+  <key>NSCameraUsageDescription</key>
+  <string>CorsixTH does not use the camera. This description is required because the SDL library the game is built on links Apple's camera API.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>CorsixTH does not use Bluetooth. This description is required because the SDL library the game is built on links Apple's Bluetooth API for game controller support.</string>
   <!-- App icon. `Assets.car` (compiled by scripts/build/ios/make-icons.sh) is the
        modern mechanism and CFBundleIconName selects the set inside it; the loose
        AppIcon*@2x.png files named below are the legacy mechanism, kept because
